@@ -5,6 +5,7 @@ import {
 import { icon, monthSwitcher, avatar, amount, meter, empty, dateTile } from '../ui.js';
 import { lineChart, legend } from '../charts.js';
 import { openTransaction } from './transactions.js';
+import { spendSummary } from './plan.js';
 
 export default async function render(ctx) {
   const { view, state } = ctx;
@@ -30,6 +31,7 @@ export default async function render(ctx) {
 
     <div class="grid grid-main">
       <div class="grid">
+        ${isCurrent ? spendCard(d.plan) : ''}
         <section class="card">
           <div class="card-head">
             <div>
@@ -91,6 +93,28 @@ export default async function render(ctx) {
     const row = e.target.closest('[data-txn]');
     if (row) openTransaction(ctx, Number(row.dataset.txn), { onChange: () => { ctx.refreshBadges(); ctx.rerender(); } });
   });
+}
+
+function spendCard(plan) {
+  if (!plan || !plan.ready) {
+    return `
+      <section class="card">
+        <div class="card-head"><h2>Left to spend</h2></div>
+        <p class="small ink-2">Add your paycheck to see how much you can spend before payday and still pay your bills and reach your goals.</p>
+        <button class="btn btn-sm btn-primary" type="button" data-nav="#/plan" style="margin-top:14px">Set up paycheck plan</button>
+      </section>`;
+  }
+  return `
+    <section class="card">
+      <div class="card-head">
+        <div><h2>Left to spend</h2><div class="card-sub">Until payday ${esc(shortDate(plan.period.nextPayday))}</div></div>
+        <button class="link-btn" type="button" data-nav="#/plan">Paycheck plan</button>
+      </div>
+      ${spendSummary(plan)}
+      ${plan.goalsDelayed ? `<p class="small warn-text plan-note" style="margin-top:12px">${icon('clock')} ${plan.isCustom
+        ? 'Your spending budget pushes a goal back.'
+        : 'Your goals need more than is left after bills.'}</p>` : ''}
+    </section>`;
 }
 
 function onboarding() {

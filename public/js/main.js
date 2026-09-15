@@ -8,6 +8,7 @@ import { esc, currentMonthKey, shiftMonth, longDate, plural } from './format.js'
 
 const ROUTES = {
   dashboard: { title: 'Dashboard', icon: 'dashboard', load: () => import('./views/dashboard.js') },
+  plan: { title: 'Paycheck', icon: 'wallet', load: () => import('./views/plan.js') },
   accounts: { title: 'Accounts', icon: 'accounts', load: () => import('./views/accounts.js') },
   transactions: { title: 'Transactions', icon: 'transactions', load: () => import('./views/transactions.js'), badge: true },
   cashflow: { title: 'Cash Flow', icon: 'cashflow', load: () => import('./views/cashflow.js') },
@@ -16,8 +17,8 @@ const ROUTES = {
   goals: { title: 'Goals', icon: 'goals', load: () => import('./views/goals.js') },
   settings: { title: 'Settings', icon: 'settings', load: () => import('./views/settings.js') },
 };
-const SIDEBAR = ['dashboard', 'accounts', 'transactions', 'cashflow', 'budget', 'recurring', 'goals'];
-const TABS = ['dashboard', 'transactions', 'budget', 'recurring'];
+const SIDEBAR = ['dashboard', 'plan', 'accounts', 'transactions', 'cashflow', 'budget', 'recurring', 'goals'];
+const TABS = ['dashboard', 'plan', 'transactions', 'budget'];
 
 const state = { user: null, month: currentMonthKey(), groups: null, reviewCount: 0 };
 
@@ -202,6 +203,7 @@ function openMore() {
     title: 'More',
     body: `
       <div class="rows">
+        ${link('recurring', 'Recurring', 'recurring')}
         ${link('accounts', 'Accounts', 'accounts')}
         ${link('cashflow', 'Cash Flow', 'cashflow')}
         ${link('goals', 'Goals', 'goals')}

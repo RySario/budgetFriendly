@@ -6,6 +6,8 @@ responsive PWA, deployed on Dokku.
 
 - **Dashboard** — spending this month against last month, budget progress,
   upcoming bills and paychecks, recent transactions, accounts, goals
+- **Paycheck** — how much is left to spend before payday, a recommended
+  spending budget per paycheck, and what a budget of your own does to your goals
 - **Transactions** — grouped by day, searchable and filterable; open one to
   change its category, teach a merchant rule, add a note, or hide it
 - **Cash Flow** — income against expenses by month, savings rate, and a
@@ -182,6 +184,34 @@ income is the sum of any income budgets you set, otherwise your detected
 paychecks. Amounts are net within a category, so a refund in Shopping reduces
 Shopping rather than counting as income.
 
+### Paycheck plan
+
+The plan answers "how much can I spend before payday?" It works per paycheck,
+using your detected pay schedule (the largest income source sets the paydays;
+other income is spread across them) or a paycheck you enter yourself.
+
+```
+recommended spending = paycheck − bills − goals
+```
+
+- **Bills** are your active recurring bills, averaged: a $1,300 monthly rent on
+  a biweekly paycheck sets aside $600 every payday, so the recommendation is the
+  same whether or not rent lands in this pay period.
+- **Goals** are savings and payoff goals with a target date: what's left,
+  divided by the paychecks until that date. Goals without a date are left out.
+
+**Left to spend** is the budget minus everyday spending since the last payday:
+spending categories, net of refunds, not counting bill payments. A charge from a
+bill's merchant within 25% of the bill's amount counts as that bill.
+
+You can set your own spending amount instead. Whatever is left after bills and
+spending goes to goals in proportion to what each needs, and each goal's
+finishing date is recalculated at that rate — spending $100 more a paycheck
+than recommended shows exactly which goals move and by how long. The page
+previews an amount as you type and only saves when you confirm. If your goals
+need more than is left after bills, the recommendation is $0 and the plan shows
+the shortfall. Settings are stored under the `paycheck_plan` key.
+
 ---
 
 ## Tests
@@ -238,6 +268,8 @@ POST   /api/transactions/review         { ids } | { all: true }
 GET    /api/categories                  POST { name, emoji, groupId }   PATCH/DELETE /:id
 GET    /api/categories/rules/all        DELETE /api/categories/rules/:id
 GET    /api/budget?month=YYYY-MM        PUT /api/budget/:categoryId { month, amount }
+GET    /api/plan?spend=N|recommended    preview without saving
+PATCH  /api/plan                        { spendingBudget: N|null, paycheck: { amount, cadence, nextPayday }|null }
 GET    /api/cashflow?months=12&by=category|group|merchant&start&end
 GET    /api/recurring?month=YYYY-MM     PATCH /api/recurring/:expense|income/:id { status }
 GET    /api/goals                       POST, PATCH/DELETE /:id, POST /:id/contributions
@@ -258,6 +290,7 @@ src/
     importers/   adapter registry, file + OFX parsers, persistence
     detect/      recurrence engine, categorisation, reconciliation
     budget.js    budget, cash flow, breakdowns, spending pace, goals
+    plan/        paycheck plan: pay periods, recommended spending, goal impact (math.js is pure)
     recurring.js calendar projection and paid/due matching
     transactions.js, accounts.js
 public/
