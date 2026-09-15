@@ -5,6 +5,7 @@ const { budgetMonth, spendingPace, allGoalProgress } = require('../services/budg
 const { recurringInRange } = require('../services/recurring');
 const { listTransactions } = require('../services/transactions');
 const { listAccounts } = require('../services/accounts');
+const { paycheckPlan } = require('../services/plan');
 const { currentMonthKey, toISODate, addDays } = require('../utils/dates');
 
 const router = express.Router();
@@ -15,13 +16,14 @@ router.get('/', async (req, res, next) => {
     const month = req.query.month || currentMonthKey();
     const today = toISODate(new Date());
 
-    const [budget, pace, upcoming, recent, goals, accounts, review, lastImport] = await Promise.all([
+    const [budget, pace, upcoming, recent, goals, accounts, plan, review, lastImport] = await Promise.all([
       budgetMonth(month),
       spendingPace(month),
       recurringInRange(today, addDays(today, 14)),
       listTransactions({ limit: 6 }),
       allGoalProgress(month),
       listAccounts(),
+      paycheckPlan(),
       db.one('SELECT COUNT(*)::int AS count FROM transactions WHERE needs_review'),
       db.one(
         `SELECT started_at, finished_at, status, imported, duplicates, message
@@ -40,6 +42,7 @@ router.get('/', async (req, res, next) => {
       recent: recent.transactions,
       goals,
       accounts,
+      plan,
       reviewCount: review.count,
       lastImport,
     });

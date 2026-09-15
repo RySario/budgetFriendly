@@ -15,6 +15,7 @@ router.use('/accounts', require('./accounts'));
 router.use('/transactions', require('./transactions'));
 router.use('/categories', require('./categories'));
 router.use('/budget', require('./budget'));
+router.use('/plan', require('./plan'));
 router.use('/cashflow', require('./cashflow'));
 router.use('/recurring', require('./recurring'));
 router.use('/goals', require('./goals'));

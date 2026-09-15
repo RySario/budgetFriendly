@@ -597,6 +597,23 @@ pre.code { display: block; padding: 10px 12px; white-space: pre-wrap; margin: 8p
   .budget-row .emoji-tile { display: none; }
 }
 
+/* ---------- paycheck plan ---------- */
+.plan-lines { display: flex; flex-direction: column; }
+.plan-line {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+  padding: 9px 0; border-top: 1px solid var(--line); font-size: 14.5px; font-variant-numeric: tabular-nums;
+}
+.plan-line:first-child { border-top: 0; padding-top: 0; }
+.plan-line > span:last-child { font-weight: 600; white-space: nowrap; }
+.plan-total { border-top: 2px solid var(--line-strong); font-weight: 650; font-size: 16px; }
+.plan-choose { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.plan-impact { margin-top: 12px; font-size: 14px; }
+.plan-impact > * + * { margin-top: 6px; }
+.plan-impact svg, .plan-note svg { width: 15px; height: 15px; vertical-align: -3px; }
+.plan-moves { margin-bottom: 0; padding-left: 18px; color: var(--ink-2); font-size: 13.5px; }
+.plan-moves li + li { margin-top: 3px; }
+.plan-goal-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-top: 5px; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
