@@ -85,7 +85,8 @@ const server = app.listen(0, async () => {
 
     for (const asset of ['/styles.css', '/js/main.js', '/js/charts.js', '/js/views/dashboard.js',
       '/js/views/transactions.js', '/js/views/cashflow.js', '/js/views/budget.js', '/js/views/recurring.js',
-      '/js/views/accounts.js', '/js/views/goals.js', '/js/views/settings.js', '/manifest.webmanifest']) {
+      '/js/views/accounts.js', '/js/views/goals.js', '/js/views/settings.js', '/js/views/plan.js',
+      '/manifest.webmanifest']) {
       const r = await call(asset);
       check(`serves ${asset}`, r.res.status === 200, String(r.res.status));
     }
@@ -110,11 +111,18 @@ const server = app.listen(0, async () => {
     for (const p of [
       '/api/auth/me', '/api/dashboard', '/api/import/history', '/api/accounts', '/api/transactions',
       '/api/categories', '/api/categories/rules/all', '/api/budget', '/api/cashflow', '/api/recurring',
-      '/api/goals', '/api/settings',
+      '/api/goals', '/api/settings', '/api/plan', '/api/plan?spend=250', '/api/plan?spend=recommended',
     ]) {
       const r = await call(p);
       check(`GET ${p}`, r.res.status === 200, `${r.res.status} ${JSON.stringify(r.body).slice(0, 180)}`);
     }
+
+    const badSpend = await call('/api/plan?spend=lots');
+    check('plan rejects a bad spend preview', badSpend.res.status === 400, String(badSpend.res.status));
+    const badPaycheck = await call('/api/plan', { method: 'PATCH', json: { paycheck: { amount: 2000, cadence: 'daily', nextPayday: '2026-09-25' } } });
+    check('plan rejects an unknown pay cadence', badPaycheck.res.status === 400, String(badPaycheck.res.status));
+    const badBudget = await call('/api/plan', { method: 'PATCH', json: { spendingBudget: -5 } });
+    check('plan rejects a negative spending budget', badBudget.res.status === 400, String(badBudget.res.status));
 
     const badMonth = await call('/api/budget?month=2026-13');
     check('budget rejects a bad month', badMonth.res.status === 400, String(badMonth.res.status));
