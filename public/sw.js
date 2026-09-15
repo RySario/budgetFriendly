@@ -3,7 +3,7 @@
    is picked up on the next load, never a mix of old and new modules. API
    responses are never cached: a stale balance is worse than an honest error. */
 
-const VERSION = 'bf-v2';
+const VERSION = 'bf-v3';
 const SHELL = [
   '/',
   '/index.html',
@@ -15,6 +15,7 @@ const SHELL = [
   '/js/ui.js',
   '/js/charts.js',
   '/js/views/dashboard.js',
+  '/js/views/plan.js',
   '/js/views/accounts.js',
   '/js/views/transactions.js',
   '/js/views/cashflow.js',

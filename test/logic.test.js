@@ -228,5 +228,71 @@ const backward = expectedDates('2026-09-11', 'biweekly', 14, '2026-08-01', '2026
 check('projection also walks backward into past months',
   JSON.stringify(backward) === JSON.stringify(['2026-08-14', '2026-08-28']), JSON.stringify(backward));
 
+// --- Paycheck plan -------------------------------------------------------------
+const { buildPlan, paychecksPerYear, perPaycheck } = require('../src/services/plan/math');
+const { payPeriod, isBillPayment } = require('../src/services/plan');
+const near = (a, b, tol = 0.02) => Math.abs(a - b) <= tol;
+
+check('paychecks per year', paychecksPerYear('biweekly') === 26 && paychecksPerYear('semimonthly') === 24
+  && paychecksPerYear('monthly') === 12, '');
+check('monthly amount spread per biweekly paycheck', perPaycheck(1300, 26) === 600, String(perPaycheck(1300, 26)));
+
+const TODAY = '2026-09-15';
+const fund = { id: 1, name: 'Emergency fund', remaining: 2600, targetDate: '2027-09-14' }; // 364 days out
+const base = { income: 2000, bills: 800, goals: [fund], today: TODAY, perYear: 26 };
+const need = 2600 / (364 / (365.25 / 26));
+const rec = buildPlan(base);
+check('plan: goal need per paycheck', near(rec.goalNeed, need), `${rec.goalNeed} vs ${need}`);
+check('plan: recommended = paycheck - bills - goals', near(rec.recommended, 1200 - need), String(rec.recommended));
+check('plan: recommended keeps the goal on its date',
+  rec.goals[0].shiftDays === 0 && Math.abs(require('../src/utils/dates').daysBetween(rec.goals[0].plannedDate, fund.targetDate)) <= 1,
+  JSON.stringify(rec.goals[0]));
+
+const over = buildPlan({ ...base, spend: rec.recommended + need / 2 });
+check('plan: spending half the goal money doubles the time', over.goals[0].shiftDays > 350 && over.goals[0].shiftDays < 380,
+  JSON.stringify(over.goals[0]));
+check('plan: difference reported', near(over.difference, need / 2), String(over.difference));
+
+const under = buildPlan({ ...base, spend: rec.recommended - 100 });
+check('plan: spending less finishes sooner', under.goals[0].shiftDays < -3, JSON.stringify(under.goals[0]));
+
+const blowout = buildPlan({ ...base, spend: 1500 });
+check('plan: spending everything after bills stalls goals',
+  blowout.goals[0].projectedDate === null && blowout.overPaycheck === 300 && blowout.toGoals === 0, JSON.stringify(blowout));
+
+const tight = buildPlan({ ...base, income: 850 });
+check('plan: unaffordable goals give a shortfall, not a negative budget',
+  tight.recommended === 0 && near(tight.shortfall, need - 50) && tight.goals[0].shiftDays > 0, JSON.stringify(tight));
+
+const odd = buildPlan({
+  ...base,
+  goals: [
+    { id: 2, name: 'Someday', remaining: 500, targetDate: null },
+    { id: 3, name: 'Late', remaining: 500, targetDate: '2026-09-01' },
+    { id: 4, name: 'Monthly', remaining: 500, targetDate: null, monthlyContribution: 130 },
+  ],
+});
+check('plan: undated goal left out, past-date goal flagged, monthly goal spread per paycheck',
+  odd.goals[0].plan === 'unplanned' && odd.goals[1].plan === 'overdue' && odd.goals[2].required === 60
+  && odd.goalNeed === 60, JSON.stringify(odd.goals));
+
+const schedule = { anchor: '2026-09-11', cadence: 'biweekly', intervalDays: 14, perYear: 26 };
+const period = payPeriod(schedule, TODAY);
+check('pay period: last payday through the day before the next',
+  period.start === '2026-09-11' && period.end === '2026-09-24' && period.nextPayday === '2026-09-25' && period.daysLeft === 10,
+  JSON.stringify(period));
+const payday = payPeriod(schedule, '2026-09-25');
+check('pay period: a new period starts on payday', payday.start === '2026-09-25' && payday.nextPayday === '2026-10-09',
+  JSON.stringify(payday));
+const fromNext = payPeriod({ ...schedule, anchor: '2026-09-25' }, TODAY);
+check('pay period: works from a future payday entered by hand', fromNext.start === '2026-09-11', JSON.stringify(fromNext));
+
+const billList = [{ merchantKey: 'NETFLIX', amount: 15.49 }];
+check('bill payments are not everyday spending',
+  isBillPayment({ amount: '-15.49', merchant_key: 'NETFLIX' }, billList)
+  && !isBillPayment({ amount: '-60.00', merchant_key: 'NETFLIX' }, billList)
+  && !isBillPayment({ amount: '15.49', merchant_key: 'NETFLIX' }, billList)
+  && !isBillPayment({ amount: '-15.49', merchant_key: 'SAFEWAY' }, billList), '');
+
 console.log(`\n${failures === 0 ? 'ALL PASSED' : `${failures} FAILURE(S)`}`);
 process.exit(failures ? 1 : 0);
