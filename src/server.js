@@ -48,13 +48,15 @@ app.get('/healthz', async (req, res) => {
 
 app.use('/api', apiRoutes);
 
-// Static frontend. The service worker must not be cached or updates never land.
+// Static frontend. Code revalidates on every load — a cheap 304 when nothing
+// changed — so a deploy is never half-applied from a stale cache. Icons rarely
+// change and may be cached for a day.
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 app.use(
   express.static(PUBLIC_DIR, {
-    maxAge: config.isProd ? '1h' : 0,
     setHeaders(res, filePath) {
-      if (filePath.endsWith('sw.js')) res.setHeader('Cache-Control', 'no-cache');
+      const icon = config.isProd && filePath.endsWith('.png');
+      res.setHeader('Cache-Control', icon ? 'public, max-age=86400' : 'no-cache');
     },
   })
 );
@@ -62,6 +64,7 @@ app.use(
 // Client-side routing: anything that is not an API call gets the shell.
 app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api/')) return next();
+  res.setHeader('Cache-Control', 'no-cache');
   res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
 });
 

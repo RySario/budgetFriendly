@@ -27,6 +27,7 @@ function initFilters(params, state) {
     allDates: params.get('review') === '1' || params.get('all') === '1' || (drilled && !params.get('month')),
     limit: PAGE,
     focusSearch: false,
+    open: false,
   };
 }
 
@@ -61,12 +62,15 @@ export default async function render(ctx) {
   const extraFilter = group ? `Group: ${group.name}`
     : filters.merchantKey ? `Merchant: ${data.transactions[0] ? data.transactions[0].merchant : filters.merchantKey}`
       : filters.accountId ? 'One account' : '';
+  const activeFilters = [filters.type, filters.categoryId, filters.review, filters.allDates, extraFilter].filter(Boolean).length;
 
   view.innerHTML = `
     <div class="toolbar">
       <label class="search grow">${icon('search')}
         <input type="search" name="search" placeholder="Search merchants, categories, notes" value="${esc(filters.search)}" aria-label="Search transactions" enterkeyhint="search">
       </label>
+      <button class="btn only-mobile" type="button" data-toggle-filters aria-expanded="${filters.open}">${icon('filter')}Filters${activeFilters ? ` · ${activeFilters}` : ''}</button>
+      <div class="toolbar-filters ${filters.open ? 'open' : ''}">
       ${segmented('type', [['', 'All'], ['spending', 'Expenses'], ['income', 'Income'], ['transfer', 'Transfers']], filters.type)}
       <select name="category" aria-label="Category">
         <option value="">All categories</option>
@@ -78,6 +82,7 @@ export default async function render(ctx) {
       </button>
       <button class="toggle-chip ${filters.allDates ? 'active' : ''}" type="button" data-toggle="allDates" aria-pressed="${filters.allDates}">All dates</button>
       ${extraFilter ? `<span class="filter-chip">${esc(extraFilter)}<button type="button" data-clear-extra aria-label="Clear filter">${icon('x')}</button></span>` : ''}
+      </div>
     </div>
 
     <div class="split small" style="margin:0 2px">
@@ -133,6 +138,14 @@ export default async function render(ctx) {
   });
 
   view.addEventListener('click', async (e) => {
+    const filterToggle = e.target.closest('[data-toggle-filters]');
+    if (filterToggle) {
+      filters.open = !filters.open;
+      view.querySelector('.toolbar-filters').classList.toggle('open', filters.open);
+      filterToggle.setAttribute('aria-expanded', String(filters.open));
+      return;
+    }
+
     const seg = e.target.closest('[data-seg="type"]');
     if (seg) { filters.type = seg.dataset.value; filters.limit = PAGE; ctx.rerender(); return; }
 

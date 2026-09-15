@@ -294,5 +294,42 @@ check('bill payments are not everyday spending',
   && !isBillPayment({ amount: '15.49', merchant_key: 'NETFLIX' }, billList)
   && !isBillPayment({ amount: '-15.49', merchant_key: 'SAFEWAY' }, billList), '');
 
+// --- Paycheck candidates -------------------------------------------------------
+const { paycheckCandidates } = require('../src/services/plan/candidates');
+const depositSeries = (key, amounts, startIso, step, categoryId = 5) => amounts.map((amt, i) => ({
+  posted_on: require('../src/utils/dates').addDays(startIso, i * step),
+  amount: amt,
+  merchant_key: key,
+  description: `Checking Deposit-ACH-1064831 ${key}`,
+  category_id: categoryId,
+  excluded: false,
+}));
+const depositPool = [
+  // A paycheck that swings with overtime and one bonus: passes the strict rules.
+  ...depositSeries('APP', [1241, 1251, 1229, 1260, 2400, 1241, 1250, 1230], '2026-06-03', 14),
+  // Regular, but it stopped arriving in February.
+  ...depositSeries('OLDJOB', [900, 900, 910, 905], '2026-01-02', 14),
+  // Monthly and on time, but the amount is all over the place.
+  ...depositSeries('GIGPAY', [200, 900, 150, 1000, 180], '2026-05-10', 30),
+  // Too small to be a paycheck.
+  ...depositSeries('CASHBACK', [12, 12, 12, 12], '2026-06-01', 30),
+  // A scheduled transfer from savings.
+  ...depositSeries('G1 ONLINE TR', [500, 500, 500, 500], '2026-06-01', 14, 99),
+  // Something the user said is not a paycheck.
+  ...depositSeries('SIDEGIG', [300, 300, 300, 300], '2026-07-01', 14),
+];
+const cands = paycheckCandidates(depositPool, '2026-09-15', { transferIds: new Set([99]), dismissed: new Set(['SIDEGIG']) });
+const byKey = Object.fromEntries(cands.map((c) => [c.merchantKey, c]));
+check('candidates: variable paycheck is strong, active, with the next payday projected',
+  byKey.APP && byKey.APP.strong && byKey.APP.active && byKey.APP.cadence === 'biweekly' && byKey.APP.nextPayday === '2026-09-23',
+  JSON.stringify(byKey.APP));
+check('candidates: listed first', cands[0] && cands[0].merchantKey === 'APP', cands.map((c) => c.merchantKey).join(','));
+check('candidates: a paycheck that stopped is strong but not active', byKey.OLDJOB && byKey.OLDJOB.strong && !byKey.OLDJOB.active,
+  JSON.stringify(byKey.OLDJOB));
+check('candidates: an erratic amount is offered, not assumed', byKey.GIGPAY && !byKey.GIGPAY.strong && byKey.GIGPAY.active,
+  JSON.stringify(byKey.GIGPAY));
+check('candidates: small deposits, transfers and dismissed series left out',
+  !byKey.CASHBACK && !byKey['G1 ONLINE TR'] && !byKey.SIDEGIG, Object.keys(byKey).join(','));
+
 console.log(`\n${failures === 0 ? 'ALL PASSED' : `${failures} FAILURE(S)`}`);
 process.exit(failures ? 1 : 0);

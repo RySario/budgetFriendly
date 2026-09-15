@@ -1,10 +1,15 @@
-// App shell: auth, routing, navigation and the upload flow. Each screen lives
-// in views/ and renders into a fresh element; the previous screen stays on
-// display, dimmed, until the new one is ready, so nothing flashes.
+// App shell: auth, routing, navigation, theme, the guided tour and the upload
+// flow. Each screen lives in views/ and renders into a fresh element; the
+// previous screen stays on display, dimmed, until the new one is ready, so
+// nothing flashes.
 
-import { api, get, post, setUnauthorizedHandler } from './api.js';
-import { $, icon, toast, openDrawer, closeDrawer, openModal } from './ui.js';
+import { api, get, post, patch, setUnauthorizedHandler } from './api.js';
+import {
+  $, icon, toast, openDrawer, closeDrawer, openModal, closeModal, segmented, markSegment,
+  themeChoice, effectiveTheme, setTheme, THEME_OPTIONS,
+} from './ui.js';
 import { esc, currentMonthKey, shiftMonth, longDate, plural } from './format.js';
+import { startTour } from './tour.js';
 
 const ROUTES = {
   dashboard: { title: 'Dashboard', icon: 'dashboard', load: () => import('./views/dashboard.js') },
@@ -17,10 +22,16 @@ const ROUTES = {
   goals: { title: 'Goals', icon: 'goals', load: () => import('./views/goals.js') },
   settings: { title: 'Settings', icon: 'settings', load: () => import('./views/settings.js') },
 };
-const SIDEBAR = ['dashboard', 'plan', 'accounts', 'transactions', 'cashflow', 'budget', 'recurring', 'goals'];
+// Sidebar sections: the everyday screens first, then planning, then reports.
+const NAV = [
+  { label: '', items: ['dashboard', 'plan', 'transactions'] },
+  { label: 'Planning', items: ['budget', 'recurring', 'goals'] },
+  { label: 'Insights', items: ['cashflow', 'accounts'] },
+];
 const TABS = ['dashboard', 'plan', 'transactions', 'budget'];
+const MORE = ['recurring', 'goals', 'cashflow', 'accounts', 'settings'];
 
-const state = { user: null, month: currentMonthKey(), groups: null, reviewCount: 0 };
+const state = { user: null, month: currentMonthKey(), groups: null, reviewCount: 0, prefs: null };
 
 let renderSeq = 0;
 let currentPath = null;
@@ -44,40 +55,43 @@ function badge(path) {
 }
 
 function renderNav(active) {
-  $('#side-nav').innerHTML = `
-    ${SIDEBAR.map((p) => `
-      <a class="side-link ${p === active ? 'active' : ''}" href="#/${p}" ${p === active ? 'aria-current="page"' : ''}>
-        ${icon(ROUTES[p].icon)}<span>${ROUTES[p].title}</span>${badge(p)}
-      </a>`).join('')}
-    <div class="side-sep"></div>
-    <a class="side-link ${active === 'settings' ? 'active' : ''}" href="#/settings">${icon('settings')}<span>Settings</span></a>
-    <button class="side-link" type="button" data-action="logout" style="border:0;background:none;width:100%;text-align:left;cursor:pointer">${icon('logout')}<span>Sign out</span></button>`;
+  const link = (p, cls) => {
+    const on = p === active;
+    return `<a class="${cls} ${on ? 'active' : ''}" href="#/${p}" data-tour="nav-${p}" ${on ? 'aria-current="page"' : ''}>
+      ${icon(ROUTES[p].icon)}<span>${ROUTES[p].title}</span>${badge(p)}</a>`;
+  };
+
+  $('#side-nav').innerHTML = NAV.map((section) => `
+    <div class="side-section">
+      ${section.label ? `<div class="side-label">${section.label}</div>` : ''}
+      ${section.items.map((p) => link(p, 'side-link')).join('')}
+    </div>`).join('');
+  $('#side-settings').classList.toggle('active', active === 'settings');
 
   const inTabs = TABS.includes(active);
   $('#tabbar').innerHTML = `
-    ${TABS.map((p) => `
-      <a class="tab ${p === active ? 'active' : ''}" href="#/${p}" ${p === active ? 'aria-current="page"' : ''}>
-        ${icon(ROUTES[p].icon)}<span>${ROUTES[p].title}</span>${badge(p)}
-      </a>`).join('')}
-    <button class="tab ${inTabs ? '' : 'active'}" type="button" data-action="more">${icon('more')}<span>More</span></button>`;
+    ${TABS.map((p) => link(p, 'tab')).join('')}
+    <button class="tab ${inTabs ? '' : 'active'}" type="button" data-action="more" data-tour="more">${icon('more')}<span>More</span></button>`;
 }
 
 async function refreshBadges() {
   try {
     const s = await get('/settings');
     state.reviewCount = s.counts.needs_review;
+    state.prefs = s.preferences || {};
     renderNav(currentPath);
   } catch { /* badges are cosmetic */ }
 }
 
-async function render() {
+/** opts.keepDrawer re-renders behind an open drawer, e.g. after a theme change. */
+async function render(opts = {}) {
   const seq = ++renderSeq;
   const { path, params } = parseHash();
   const route = ROUTES[path];
   const samePage = path === currentPath;
   currentPath = path;
 
-  closeDrawer();
+  if (!opts.keepDrawer) closeDrawer();
   document.title = `${route.title} · BudgetFriendly`;
   $('#page-title').textContent = route.title;
   renderNav(path);
@@ -100,7 +114,7 @@ async function render() {
     params,
     state,
     navigate,
-    rerender: render,
+    rerender: () => render(),
     refreshBadges,
     setActions: (html) => { actions = html; },
     setHeaderHandler: (fn) => { handler = fn; },
@@ -133,7 +147,7 @@ async function render() {
         <div class="empty-title">This page didn't load</div><div>${esc(err.message)}</div>
         <button class="btn" type="button" data-retry>Try again</button>
       </div></section></div>`;
-    content.querySelector('[data-retry]').addEventListener('click', render);
+    content.querySelector('[data-retry]').addEventListener('click', () => render());
   }
 }
 
@@ -195,22 +209,50 @@ async function uploadFile(file) {
 }
 
 function openMore() {
-  const link = (path, label, ic) => `
-    <a class="row" href="#/${path}" style="padding-left:0;padding-right:0">
-      <span class="emoji-tile">${icon(ic)}</span><div class="row-main"><div class="row-title">${label}</div></div>${icon('right')}
-    </a>`;
   openDrawer({
     title: 'More',
     body: `
-      <div class="rows">
-        ${link('recurring', 'Recurring', 'recurring')}
-        ${link('accounts', 'Accounts', 'accounts')}
-        ${link('cashflow', 'Cash Flow', 'cashflow')}
-        ${link('goals', 'Goals', 'goals')}
-        ${link('settings', 'Settings', 'settings')}
+      <nav class="more-grid" aria-label="More pages">
+        ${MORE.map((p) => `
+          <a class="more-tile ${p === currentPath ? 'active' : ''}" href="#/${p}">${icon(ROUTES[p].icon)}<span>${ROUTES[p].title}</span></a>`).join('')}
+      </nav>
+      <div class="more-section">
+        <div class="field-label">Appearance</div>
+        ${segmented('theme', THEME_OPTIONS, themeChoice())}
       </div>
-      <button class="btn btn-primary btn-block" type="button" data-action="upload" style="margin-top:16px">${icon('upload')}Upload statement</button>
-      <button class="btn btn-quiet btn-block" type="button" data-action="logout" style="margin-top:8px">${icon('logout')}Sign out</button>`,
+      <div class="more-actions">
+        <button class="btn btn-primary btn-block" type="button" data-action="upload">${icon('upload')}Upload statement</button>
+        <button class="btn btn-block" type="button" data-action="tour">${icon('help')}Take the tour</button>
+        <button class="btn btn-quiet btn-block" type="button" data-action="logout">${icon('logout')}Sign out</button>
+      </div>`,
+  });
+}
+
+// --- theme and tour -------------------------------------------------------------
+
+function updateThemeButton() {
+  const dark = effectiveTheme() === 'dark';
+  const button = $('#theme-toggle');
+  const label = dark ? 'Switch to light mode' : 'Switch to dark mode';
+  button.innerHTML = icon(dark ? 'sun' : 'moon');
+  button.setAttribute('aria-label', label);
+  button.title = label;
+}
+
+function onThemeChange() {
+  updateThemeButton();
+  // Charts read their colours when drawn, so redraw the page behind any drawer.
+  if (state.user) render({ keepDrawer: true });
+}
+
+function runTour() {
+  closeDrawer();
+  closeModal();
+  startTour({
+    onFinish() {
+      state.prefs = { ...(state.prefs || {}), tourCompletedAt: new Date().toISOString() };
+      patch('/settings/preferences', { tourCompleted: true }).catch(() => { /* it offers itself again next time */ });
+    },
   });
 }
 
@@ -229,6 +271,7 @@ async function showApp(user) {
   $('#app').hidden = false;
   await refreshBadges();
   await render();
+  if (state.prefs && !state.prefs.tourCompletedAt) runTour();
 }
 
 async function logout() {
@@ -242,6 +285,18 @@ setUnauthorizedHandler(showLogin);
 
 $('#side-upload').innerHTML = `${icon('upload')}Upload statement`;
 $('#top-upload').innerHTML = icon('upload');
+$('#side-tools').innerHTML = `
+  <a class="side-link" href="#/settings" id="side-settings">${icon('settings')}<span>Settings</span></a>
+  <button class="side-link" type="button" data-action="tour" data-tour="help">${icon('help')}<span>Take the tour</span></button>
+  <button class="side-link" type="button" data-action="logout">${icon('logout')}<span>Sign out</span></button>`;
+updateThemeButton();
+
+window.addEventListener('bf-themechange', onThemeChange);
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+  if (themeChoice() !== 'system') return;
+  if (window.bfApplyTheme) window.bfApplyTheme('system');
+  onThemeChange();
+});
 
 document.addEventListener('click', (e) => {
   const step = e.target.closest('[data-month-step]');
@@ -252,9 +307,15 @@ document.addEventListener('click', (e) => {
     }
     return;
   }
+  const themeOption = e.target.closest('[data-seg="theme"]');
+  if (themeOption) { markSegment(themeOption); setTheme(themeOption.dataset.value); return; }
+  if (e.target.closest('[data-action="theme"]')) { setTheme(effectiveTheme() === 'dark' ? 'light' : 'dark'); return; }
+  if (e.target.closest('[data-action="tour"]')) { runTour(); return; }
   if (e.target.closest('[data-action="upload"]')) { $('#file-input').click(); return; }
   if (e.target.closest('[data-action="logout"]')) { logout(); return; }
   if (e.target.closest('[data-action="more"]')) { openMore(); return; }
+  // The page may already be the one picked, so no hashchange closes the sheet.
+  if (e.target.closest('.more-tile')) closeDrawer();
   const nav = e.target.closest('[data-nav]');
   if (nav) { e.preventDefault(); closeDrawer(); navigate(nav.dataset.nav); }
 });
