@@ -32,7 +32,7 @@ month and your goals are on track.
 
 ## Quick start
 
-You need Node 20+ and a Postgres database.
+You need Node 24 (the pinned LTS; newer works locally) and a Postgres database.
 
 ```bash
 git clone <this repo> && cd budgetFriendly
