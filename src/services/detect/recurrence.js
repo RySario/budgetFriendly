@@ -1,5 +1,5 @@
 'use strict';
-const { daysBetween, addDays, parseISODate } = require('../../utils/dates');
+const { daysBetween, addDays, parseISODate, toISODate } = require('../../utils/dates');
 const { median, coefficientOfVariation, round2 } = require('../../utils/money');
 const { prettyMerchant } = require('../../utils/merchant');
 
@@ -82,17 +82,23 @@ function detectRecurring(txns, direction, opts = {}) {
   const results = [];
 
   for (const [merchantKey, items] of groups) {
-    items.sort((a, b) => (a.posted_on < b.posted_on ? -1 : 1));
+    // Normalise to 'YYYY-MM-DD' up front, so sorting, same-day comparison and
+    // everything written back to the database work whether the caller passed
+    // strings or Date objects.
+    const dated = items
+      .map((t) => ({ ...t, posted_on: toISODate(t.posted_on) }))
+      .filter((t) => t.posted_on)
+      .sort((a, b) => (a.posted_on < b.posted_on ? -1 : 1));
 
     // Collapse same-day duplicates (a merchant charging twice in a day is one
     // event for cadence purposes).
     const byDay = [];
-    for (const t of items) {
+    for (const t of dated) {
       const last = byDay[byDay.length - 1];
       if (last && last.posted_on === t.posted_on) {
         last.amount = round2(Number(last.amount) + Number(t.amount));
       } else {
-        byDay.push({ ...t, posted_on: String(t.posted_on).slice(0, 10) });
+        byDay.push(t);
       }
     }
     if (byDay.length < Math.max(2, minOccurrences - 1)) continue;

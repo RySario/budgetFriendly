@@ -1,7 +1,9 @@
 'use strict';
 const express = require('express');
 const db = require('../db');
-const { overrideCategory, categorizeAll } = require('../services/detect/categorize');
+const {
+  overrideCategory, categorizeAll, renormaliseMerchants,
+} = require('../services/detect/categorize');
 const { runDetection } = require('../services/detect');
 const { normaliseMerchant } = require('../utils/merchant');
 const { importHash } = require('../utils/crypto');
@@ -140,9 +142,10 @@ router.delete('/:id', async (req, res, next) => {
 router.post('/reanalyze', async (req, res, next) => {
   try {
     const onlyUncategorised = req.body && req.body.all === true ? false : true;
+    const renormalised = await renormaliseMerchants();
     const categorised = await categorizeAll({ onlyUncategorised });
     const detection = await runDetection();
-    res.json({ categorised, detection });
+    res.json({ renormalised, categorised, detection });
   } catch (err) { next(err); }
 });
 

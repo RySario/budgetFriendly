@@ -59,6 +59,16 @@ function normaliseMerchant(raw) {
   // Drop everything after a "DES:"/"ID:"/"INDN:" ACH addenda marker.
   s = s.replace(/\b(DES|ID|INDN|CO ID|TRN|PPD ID|CCD ID|WEB ID|ARC ID)\s*:.*$/i, ' ');
 
+  // Credit-union transaction-type wrappers sit in front of any processor
+  // prefix — Golden 1 writes "WITHDRAWAL AT SQ *SHOP" and
+  // "CHECKING DEPOSIT-ACH-1064831 EMPLOYER". Strip them first so the processor
+  // unwrapping below sees the merchant. The trailing "AT"/"@" is only removed
+  // when a wrapper was, so a merchant genuinely named "AT ..." survives.
+  const unwrapped = s
+    .replace(/^(?:CHECKING|SAVINGS|MONEY MARKET)\s+(?:DEPOSIT|WITHDRAWAL)(?:-ACH(?:-[A-Z])?-\d+)?(?:\s+|$)/, '')
+    .replace(/^(?:WITHDRAWAL|DEPOSIT)(?:-ACH(?:-[A-Z])?-\d+)?(?:\s+REVERSAL)?(?:\s+|$)/, '');
+  if (unwrapped !== s) s = unwrapped.replace(/^(?:AT|@)\s+/, '');
+
   // Unwrap payment-processor prefixes, which stack ("AMZN MKTP US*1A2B3C").
   for (let i = 0; i < 3; i += 1) {
     const before = s;
