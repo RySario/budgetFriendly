@@ -7,6 +7,10 @@ const { config } = require('../config');
 const types = require('pg').types;
 types.setTypeParser(1700, (v) => (v === null ? null : parseFloat(v)));
 types.setTypeParser(20, (v) => (v === null ? null : parseInt(v, 10)));
+// `date` columns stay as their 'YYYY-MM-DD' text. The default turns them into
+// JS Dates at local midnight, which stringify as "Tue Aug 04 ..." and shift a
+// day when serialised in any timezone other than UTC.
+types.setTypeParser(1082, (v) => v);
 
 const pool = new Pool({
   connectionString: config.databaseUrl,

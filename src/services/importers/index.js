@@ -4,7 +4,7 @@ const { normaliseMerchant } = require('../../utils/merchant');
 const { importHash } = require('../../utils/crypto');
 const { round2 } = require('../../utils/money');
 const { toISODate } = require('../../utils/dates');
-const { categorizeAll } = require('../detect/categorize');
+const { categorizeAll, renormaliseMerchants } = require('../detect/categorize');
 const { runDetection } = require('../detect');
 
 // ---------------------------------------------------------------------------
@@ -169,7 +169,11 @@ async function runImport(connection, options = {}) {
   try {
     const payload = await adapter.fetch(connection, options);
     const stats = await persist(connection, payload, { source: adapter.id });
-    const categorised = await categorizeAll({ onlyUncategorised: true });
+    // Bring every existing row up to the current merchant normalisation and
+    // rules before detection, so improvements reach already-imported data.
+    // Manually categorised rows are locked and left alone.
+    await renormaliseMerchants();
+    const categorised = await categorizeAll();
     const detection = await runDetection();
 
     await db.query(

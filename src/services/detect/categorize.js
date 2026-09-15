@@ -1,5 +1,6 @@
 'use strict';
 const db = require('../../db');
+const { normaliseMerchant } = require('../../utils/merchant');
 
 // Rule-based categorisation. Rules are matched against the normalised merchant
 // key and the raw description, highest priority first. A transaction the user
@@ -107,4 +108,27 @@ async function overrideCategory(transactionId, categoryId, { learn = true } = {}
   return db.one('SELECT * FROM transactions WHERE id = $1', [transactionId]);
 }
 
-module.exports = { categorizeAll, overrideCategory, pickCategory, loadRules };
+/**
+ * Recompute merchant keys from the stored raw names. Keys are derived data, so
+ * when normalisation improves, existing rows have to follow — otherwise old and
+ * new transactions from the same merchant stop grouping together.
+ * @returns {number} rows whose key changed
+ */
+async function renormaliseMerchants() {
+  const rows = await db.many(
+    'SELECT id, merchant_raw, description, merchant_key FROM transactions'
+  );
+  let updated = 0;
+  for (const t of rows) {
+    const key = normaliseMerchant(t.merchant_raw || t.description);
+    if (key !== t.merchant_key) {
+      await db.query('UPDATE transactions SET merchant_key = $1 WHERE id = $2', [key, t.id]);
+      updated += 1;
+    }
+  }
+  return updated;
+}
+
+module.exports = {
+  categorizeAll, overrideCategory, pickCategory, loadRules, renormaliseMerchants,
+};

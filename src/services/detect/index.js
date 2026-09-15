@@ -95,11 +95,13 @@ async function refreshIncome(txns) {
     (await db.many(`SELECT id FROM categories WHERE kind = 'transfer'`)).map((r) => r.id)
   );
 
-  // Refunds and one-off reimbursements are inflows but not income; require a
-  // steadier cadence and a meaningful amount before calling something a paycheck.
+  // Paychecks keep a steady cadence but not a steady amount — hours, overtime
+  // and bonuses move it around — so income tolerates far more amount variation
+  // than subscriptions do. Refunds and one-off reimbursements still fall out on
+  // cadence regularity and the minimum amount below.
   const candidates = detectRecurring(txns, 'in', {
     minOccurrences: 3,
-    maxAmountVariation: 0.35,
+    maxAmountVariation: 0.6,
     minRegularity: 0.6,
   })
     .filter((s) => !transferIds.has(s.categoryId))
