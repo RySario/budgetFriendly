@@ -5,9 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>BudgetFriendly</title>
   <meta name="description" content="Personal budgeting.">
-  <meta name="theme-color" content="#f7f7f5" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f5f6fa" id="theme-color">
   <meta name="color-scheme" content="light dark">
+  <!-- Applies a saved light or dark choice before the first paint. -->
+  <script src="/js/theme.js"></script>
 
   <!-- iOS home-screen behaviour: full-screen, no Safari chrome. -->
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -42,7 +43,8 @@
       <a class="brand" href="#/dashboard"><span class="brand-mark" aria-hidden="true"></span>BudgetFriendly</a>
       <nav class="side-nav" id="side-nav"></nav>
       <div class="side-foot">
-        <button class="btn btn-primary btn-block" type="button" data-action="upload" id="side-upload"></button>
+        <button class="btn btn-primary btn-block" type="button" data-action="upload" data-tour="upload" id="side-upload"></button>
+        <div class="side-tools" id="side-tools"></div>
       </div>
     </aside>
 
@@ -52,7 +54,10 @@
           <h1 id="page-title">Dashboard</h1>
         </div>
         <div class="topbar-actions" id="page-actions"></div>
-        <button class="icon-btn only-mobile" type="button" data-action="upload" aria-label="Upload statement" id="top-upload"></button>
+        <div class="topbar-tools">
+          <button class="icon-btn" type="button" data-action="theme" data-tour="theme" id="theme-toggle" aria-label="Switch theme"></button>
+          <button class="icon-btn only-mobile" type="button" data-action="upload" data-tour="upload" aria-label="Upload statement" id="top-upload"></button>
+        </div>
       </header>
       <main id="content" class="content" tabindex="-1"></main>
     </div>

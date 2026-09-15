@@ -47,7 +47,7 @@ router.patch('/', async (req, res, next) => {
       if (body.paycheck === null) {
         changes.paycheck = null;
       } else {
-        const { amount, cadence, nextPayday } = body.paycheck;
+        const { amount, cadence, nextPayday, name } = body.paycheck;
         const value = Number(amount);
         if (!Number.isFinite(value) || value <= 0) {
           return res.status(400).json({ error: 'Paycheck amount must be more than zero.' });
@@ -57,7 +57,8 @@ router.patch('/', async (req, res, next) => {
         }
         const anchorDate = /^\d{4}-\d{2}-\d{2}$/.test(String(nextPayday || '')) ? toISODate(nextPayday) : null;
         if (!anchorDate) return res.status(400).json({ error: 'Enter a payday date.' });
-        changes.paycheck = { amount: round2(value), cadence, anchorDate };
+        const label = typeof name === 'string' ? name.trim().slice(0, 60) : '';
+        changes.paycheck = { amount: round2(value), cadence, anchorDate, ...(label ? { name: label } : {}) };
       }
     }
 

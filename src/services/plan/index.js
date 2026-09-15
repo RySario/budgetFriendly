@@ -1,6 +1,6 @@
 'use strict';
 const db = require('../../db');
-const { estimateMonthlyIncome } = require('../detect');
+const { estimateMonthlyIncome, LOOKBACK_DAYS } = require('../detect');
 const { isActive } = require('../detect/recurrence');
 const { KIND_SQL, FROM_SQL } = require('../transactions');
 const { allGoalProgress } = require('../budget');
@@ -8,11 +8,14 @@ const { recurringInRange, expectedDates } = require('../recurring');
 const { round2, sum } = require('../../utils/money');
 const { toISODate, addDays, daysBetween, currentMonthKey } = require('../../utils/dates');
 const { paychecksPerYear, perPaycheck, buildPlan } = require('./math');
+const { paycheckCandidates } = require('./candidates');
 
 // The paycheck plan: how much you can spend between paydays and still pay your
-// bills and reach your goals on time. The paycheck comes from detected income
-// unless you've entered one; the spending amount is the recommendation unless
-// you've set your own.
+// bills and reach your goals on time. The paycheck is, in order: one you've
+// entered, detected income stored by the last upload, or — because stored
+// detection only refreshes on upload — a strong, still-arriving series found
+// in the transactions right now. Without any of those, the plan says what it
+// did find so you can pick.
 
 const SETTINGS_KEY = 'paycheck_plan';
 const CADENCE_DAYS = { weekly: 7, biweekly: 14, semimonthly: 15, monthly: 30 };
@@ -38,36 +41,77 @@ async function saveSettings(changes, q = db) {
   return next;
 }
 
-async function resolvePaycheck(settings, q) {
-  const manual = settings.paycheck;
-  if (manual) {
-    return {
-      source: 'manual',
-      name: 'Your paycheck',
-      amount: round2(manual.amount),
-      cadence: manual.cadence,
-      intervalDays: CADENCE_DAYS[manual.cadence],
-      anchor: manual.anchorDate,
-      perYear: paychecksPerYear(manual.cadence),
-      sources: [],
-    };
-  }
-
-  // Sources arrive largest first; the largest sets the pay schedule, and every
-  // other income source is spread across it.
-  const { sources } = await estimateMonthlyIncome(q);
-  if (!sources.length) return null;
-  const primary = sources[0];
-  const perYear = paychecksPerYear(primary.cadence, primary.interval_days);
+function manualPaycheck(manual) {
   return {
-    source: 'detected',
+    source: 'manual',
+    name: manual.name || 'Your paycheck',
+    amount: round2(manual.amount),
+    cadence: manual.cadence,
+    intervalDays: CADENCE_DAYS[manual.cadence],
+    anchor: manual.anchorDate,
+    perYear: paychecksPerYear(manual.cadence),
+    sources: [],
+  };
+}
+
+/**
+ * One paycheck from one or more income series. The largest sets the pay
+ * schedule; every other series is spread across it.
+ * list: [{ name, amount, cadence, intervalDays, monthlyAmount, lastSeenOn }]
+ */
+function describePaycheck(list, source) {
+  const sorted = [...list].sort((a, b) => b.monthlyAmount - a.monthlyAmount);
+  const primary = sorted[0];
+  const perYear = paychecksPerYear(primary.cadence, primary.intervalDays);
+  return {
+    source,
     name: primary.name,
-    amount: perPaycheck(sum(sources.map((s) => s.monthly_amount)), perYear),
+    amount: perPaycheck(sum(sorted.map((s) => s.monthlyAmount)), perYear),
     cadence: primary.cadence,
-    intervalDays: primary.interval_days,
-    anchor: toISODate(primary.last_seen_on),
+    intervalDays: primary.intervalDays,
+    anchor: primary.lastSeenOn,
     perYear,
-    sources: sources.map((s) => ({ name: s.name, amount: round2(s.amount), cadence: s.cadence })),
+    sources: sorted.map((s) => ({ name: s.name, amount: round2(s.amount), cadence: s.cadence })),
+  };
+}
+
+const fromIncomeSource = (s) => ({
+  name: s.name,
+  amount: Number(s.amount),
+  cadence: s.cadence,
+  intervalDays: s.interval_days,
+  monthlyAmount: Number(s.monthly_amount),
+  lastSeenOn: toISODate(s.last_seen_on),
+});
+
+async function liveCandidates(today, q) {
+  const rows = await q.many(
+    `SELECT t.posted_on, t.amount, t.merchant_key, t.description, t.category_id, t.excluded
+       FROM transactions t
+       JOIN accounts a ON a.id = t.account_id
+      WHERE t.posted_on >= $1 AND t.amount > 0 AND t.pending = false AND a.archived = false`,
+    [addDays(today, -LOOKBACK_DAYS)]
+  );
+  const transfers = await q.many(`SELECT id FROM categories WHERE kind = 'transfer'`);
+  const dismissed = await q.many(`SELECT merchant_key FROM income_sources WHERE status = 'dismissed'`);
+  return paycheckCandidates(rows, today, {
+    transferIds: new Set(transfers.map((r) => r.id)),
+    dismissed: new Set(dismissed.map((r) => r.merchant_key)),
+  });
+}
+
+/** What the plan looked at when it couldn't settle on a paycheck. */
+async function diagnose(candidates, q) {
+  const totals = await q.one('SELECT COUNT(*)::int AS n, MAX(posted_on) AS last FROM transactions');
+  const dismissed = await q.many(
+    `SELECT id, name, amount, cadence FROM income_sources
+      WHERE status = 'dismissed' ORDER BY monthly_amount DESC LIMIT 3`
+  );
+  return {
+    transactions: (totals && totals.n) || 0,
+    lastTransactionOn: totals && totals.last ? toISODate(totals.last) : null,
+    dismissed: dismissed.map((s) => ({ id: s.id, name: s.name, amount: round2(s.amount), cadence: s.cadence })),
+    candidates: candidates || [],
   };
 }
 
@@ -150,8 +194,19 @@ async function paycheckPlan({ spend } = {}, q = db) {
   const today = toISODate(new Date());
   const settings = await loadSettings(q);
   const custom = settings.spendingBudget == null ? null : round2(settings.spendingBudget);
-  const paycheck = await resolvePaycheck(settings, q);
-  if (!paycheck) return { ready: false, today, custom };
+
+  let paycheck = settings.paycheck ? manualPaycheck(settings.paycheck) : null;
+  if (!paycheck) {
+    const { sources } = await estimateMonthlyIncome(q);
+    if (sources.length) paycheck = describePaycheck(sources.map(fromIncomeSource), 'detected');
+  }
+  let candidates = null;
+  if (!paycheck) {
+    candidates = await liveCandidates(today, q);
+    const found = candidates.filter((c) => c.strong && c.active);
+    if (found.length) paycheck = describePaycheck(found, 'found');
+  }
+  if (!paycheck) return { ready: false, today, custom, diagnosis: await diagnose(candidates, q) };
 
   const period = payPeriod(paycheck, today);
   const bills = await activeBills(today, q);
@@ -210,5 +265,5 @@ async function paycheckPlan({ spend } = {}, q = db) {
 }
 
 module.exports = {
-  paycheckPlan, saveSettings, loadSettings, payPeriod, isBillPayment, CADENCE_DAYS,
+  paycheckPlan, saveSettings, loadSettings, payPeriod, isBillPayment, describePaycheck, CADENCE_DAYS,
 };
