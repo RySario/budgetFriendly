@@ -124,8 +124,11 @@ async function main() {
   );
   check('upgrade: categories grouped with emoji', groceries && groceries.group_name === 'Food & Dining' && groceries.emoji === '🛒',
     JSON.stringify(groceries));
-  const oldTxn = await db.one(`SELECT category_id FROM transactions WHERE import_hash = 'old-hash'`);
-  check('upgrade: old transaction kept, category cleared for re-categorising', oldTxn && oldTxn.category_id === null,
+  // 004 clears the old category; 005 re-runs categorisation on existing rows.
+  const oldTxn = await db.one(
+    `SELECT c.name FROM transactions t LEFT JOIN categories c ON c.id = t.category_id WHERE t.import_hash = 'old-hash'`
+  );
+  check('upgrade: old transaction kept and re-categorised', oldTxn && oldTxn.name === 'Uncategorized',
     JSON.stringify(oldTxn));
   const g1Rule = await db.one(
     `SELECT r.priority FROM category_rules r JOIN categories c ON c.id = r.category_id
@@ -303,6 +306,29 @@ async function main() {
     check('goals: contribution moves progress', contrib.status === 201 && contrib.body.goal.percent === 25, JSON.stringify(contrib.body));
     const settings = await call('/api/settings');
     check('settings: counts', settings.status === 200 && settings.body.counts.learned_rules === 1, JSON.stringify(settings.body));
+
+    // Paycheck plan: stored detection, the live fallback, and re-detection
+    const planRes = await call('/api/plan');
+    check('plan: ready from the detected paycheck', planRes.status === 200 && planRes.body.ready === true
+      && planRes.body.paycheck.source === 'detected' && planRes.body.paycheck.cadence === 'biweekly',
+    JSON.stringify(planRes.body).slice(0, 300));
+    await db.query('DELETE FROM income_sources');
+    const foundRes = await call('/api/plan');
+    check('plan: finds the paycheck in transactions when stored detection is missing',
+      foundRes.body.ready === true && foundRes.body.paycheck.source === 'found', JSON.stringify(foundRes.body).slice(0, 300));
+    await require('../src/db/migrations/005_redetect.js').up(db);
+    const redetected = await db.many('SELECT merchant_key FROM income_sources');
+    check('migration 005: re-detection restores the paycheck', redetected.length >= 1, JSON.stringify(redetected));
+    const customRes = await call('/api/plan', { method: 'PATCH', json: { spendingBudget: 100 } });
+    check('plan: custom budget saved', customRes.status === 200 && customRes.body.isCustom === true && customRes.body.budget === 100,
+      JSON.stringify(customRes.body).slice(0, 200));
+    const previewRes = await call('/api/plan?spend=recommended');
+    check('plan: a preview changes nothing', previewRes.body.isCustom === false && previewRes.body.custom === 100,
+      JSON.stringify(previewRes.body).slice(0, 200));
+    await call('/api/plan', { method: 'PATCH', json: { spendingBudget: null } });
+    await call('/api/settings/preferences', { method: 'PATCH', json: { tourCompleted: true } });
+    const prefsRes = await call('/api/settings');
+    check('preferences: finished tour stored', !!prefsRes.body.preferences.tourCompletedAt, JSON.stringify(prefsRes.body.preferences));
 
     // A bad file is rejected, recorded, and changes nothing
     const before = await db.one('SELECT COUNT(*)::int AS n FROM transactions');

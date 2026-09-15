@@ -1,6 +1,8 @@
 import { get, post, patch, del, api } from '../api.js';
 import { esc } from '../format.js';
-import { icon, openDrawer, toast, empty, confirmDialog } from '../ui.js';
+import {
+  icon, openDrawer, toast, empty, confirmDialog, segmented, themeChoice, THEME_OPTIONS,
+} from '../ui.js';
 
 export default async function render(ctx) {
   const { view } = ctx;
@@ -9,8 +11,20 @@ export default async function render(ctx) {
   ]);
   const learned = rules.filter((r) => r.auto);
 
+  // The theme control and the tour button are handled by the app shell, so
+  // they behave the same here as in the More sheet.
   view.innerHTML = `
     <div class="grid grid-2">
+      <section class="card">
+        <div class="card-head"><h2>Appearance</h2></div>
+        <p class="small muted" style="margin-bottom:12px">Auto follows your device's light or dark setting. The choice is saved on this device.</p>
+        ${segmented('theme', THEME_OPTIONS, themeChoice())}
+        <div class="settings-divider"></div>
+        <div class="card-head" style="margin-bottom:6px"><h2>Guided tour</h2></div>
+        <p class="small muted">A one-minute look at where everything is.</p>
+        <button class="btn btn-sm" type="button" data-action="tour" style="margin-top:12px">${icon('help')}Take the tour</button>
+      </section>
+
       <section class="card">
         <div class="card-head"><h2>Your account</h2></div>
         <div class="kv"><span class="muted">Signed in as</span><span class="truncate">${esc(s.user.email)}</span></div>
@@ -19,18 +33,25 @@ export default async function render(ctx) {
           <button class="btn btn-sm btn-quiet" type="button" data-action="logout">${icon('logout')}Sign out</button>
         </div>
       </section>
-
-      <section class="card">
-        <div class="card-head"><h2>Your data</h2></div>
-        <div class="kv"><span class="muted">Transactions</span><span class="num">${s.counts.transactions}</span></div>
-        <div class="kv"><span class="muted">Waiting for review</span><span class="num">${s.counts.needs_review}</span></div>
-        <div class="kv"><span class="muted">Accounts</span><span class="num">${s.counts.accounts}</span></div>
-        <div class="kv"><span class="muted">Categories</span><span class="num">${s.counts.categories}</span></div>
-        <div class="kv"><span class="muted">Merchant rules</span><span class="num">${s.counts.rules} (${s.counts.learned_rules} yours)</span></div>
-        <p class="small muted" style="margin-top:14px">To erase all financial data and start over — your login is kept — run this on the server:</p>
-        <pre class="code">dokku run budgetfriendly npm run reset-data -- --yes</pre>
-      </section>
     </div>
+
+    <section class="card">
+      <div class="card-head"><h2>Your data</h2></div>
+      <div class="grid grid-2" style="gap:0 32px">
+        <div>
+          <div class="kv"><span class="muted">Transactions</span><span class="num">${s.counts.transactions}</span></div>
+          <div class="kv"><span class="muted">Waiting for review</span><span class="num">${s.counts.needs_review}</span></div>
+          <div class="kv"><span class="muted">Accounts</span><span class="num">${s.counts.accounts}</span></div>
+        </div>
+        <div>
+          <div class="kv"><span class="muted">Categories</span><span class="num">${s.counts.categories}</span></div>
+          <div class="kv"><span class="muted">Merchant rules</span><span class="num">${s.counts.rules} (${s.counts.learned_rules} yours)</span></div>
+          <div class="kv"><span class="muted">Goals</span><span class="num">${s.counts.goals}</span></div>
+        </div>
+      </div>
+      <p class="small muted" style="margin-top:14px">To erase all financial data and start over — your login is kept — run this on the server:</p>
+      <pre class="code">dokku run budgetfriendly npm run reset-data -- --yes</pre>
+    </section>
 
     <section class="card card-flush">
       <div class="card-head">

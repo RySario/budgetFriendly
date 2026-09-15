@@ -1,5 +1,5 @@
-// Shared UI: icons, toasts, drawer, modal and small markup helpers. Any text
-// that came from data goes through esc() before it reaches innerHTML.
+// Shared UI: icons, theme, toasts, drawer, modal and small markup helpers. Any
+// text that came from data goes through esc() before it reaches innerHTML.
 
 import { esc, monthLabel, currentMonthKey, txnAmount } from './format.js';
 
@@ -35,11 +35,46 @@ const PATHS = {
   trash: '<path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>',
   file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
   eyeOff: '<path d="M17.9 17.9A10 10 0 0 1 12 20c-7 0-10-8-10-8a18 18 0 0 1 4.1-5.9M9.9 4.2A9 9 0 0 1 12 4c7 0 10 8 10 8a18 18 0 0 1-2.2 3.2M1 1l22 22"/><path d="M14.1 14.1a3 3 0 1 1-4.2-4.2"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
+  help: '<circle cx="12" cy="12" r="9"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4.5M12 17.5h.01"/>',
+  filter: '<path d="M4 6h16M7 12h10M10 18h4"/>',
 };
 
 export function icon(name, size) {
   const s = size ? ` width="${size}" height="${size}"` : '';
   return `<svg viewBox="0 0 24 24"${s} fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${PATHS[name] || ''}</svg>`;
+}
+
+// --- theme --------------------------------------------------------------------
+// The choice is per device: a phone can stay dark while a desktop follows the
+// system. theme.js applies it before first paint; this is the runtime side.
+
+const THEME_KEY = 'bf-theme';
+export const THEME_OPTIONS = [['light', 'Light'], ['dark', 'Dark'], ['system', 'Auto']];
+
+/** 'light', 'dark' or 'system' (follow the device). */
+export function themeChoice() {
+  try {
+    return localStorage.getItem(THEME_KEY) || 'system';
+  } catch {
+    return 'system';
+  }
+}
+
+export function effectiveTheme() {
+  const choice = themeChoice();
+  if (choice === 'light' || choice === 'dark') return choice;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+export function setTheme(choice) {
+  try {
+    if (choice === 'light' || choice === 'dark') localStorage.setItem(THEME_KEY, choice);
+    else localStorage.removeItem(THEME_KEY);
+  } catch { /* storage blocked: the change lasts for this visit */ }
+  if (window.bfApplyTheme) window.bfApplyTheme(choice);
+  window.dispatchEvent(new CustomEvent('bf-themechange'));
 }
 
 // --- toast --------------------------------------------------------------------
@@ -167,6 +202,16 @@ export function segmented(name, options, value) {
   return `<div class="seg" role="tablist" aria-label="${esc(name)}">${options.map(([v, label]) => `
     <button type="button" role="tab" data-seg="${esc(name)}" data-value="${esc(v)}"
       aria-selected="${v === value}" class="${v === value ? 'active' : ''}">${esc(label)}</button>`).join('')}</div>`;
+}
+
+/** Mark one button of a segmented control as selected without re-rendering. */
+export function markSegment(button) {
+  const group = button.closest('.seg');
+  if (!group) return;
+  group.querySelectorAll('button').forEach((b) => {
+    b.classList.toggle('active', b === button);
+    b.setAttribute('aria-selected', String(b === button));
+  });
 }
 
 export function avatar(name, cls = '') {

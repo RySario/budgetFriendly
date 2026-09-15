@@ -16,6 +16,8 @@ responsive PWA, deployed on Dokku.
 - **Recurring** — detected bills and paychecks as a list or calendar, each
   marked paid, due, upcoming or not found
 - **Accounts** and **Goals**
+- **Light and dark mode** (or follow the device), and a one-minute guided tour
+  on first sign-in that you can replay from Settings
 
 No bank logins, no aggregator. You download a statement and upload it.
 
@@ -212,6 +214,13 @@ previews an amount as you type and only saves when you confirm. If your goals
 need more than is left after bills, the recommendation is $0 and the plan shows
 the shortfall. Settings are stored under the `paycheck_plan` key.
 
+Stored detection is refreshed by uploads, so when it has no paycheck the plan
+looks through the last 400 days of deposits itself. A series that passes the
+normal paycheck rules and is still arriving is used straight away. Otherwise the
+Paycheck page lists what it found — repeating deposits, a paycheck that stopped
+arriving (usually a sign the latest statement isn't uploaded yet), or one you
+marked as not recurring — and you pick one or enter your pay by hand.
+
 ---
 
 ## Tests
@@ -273,7 +282,7 @@ PATCH  /api/plan                        { spendingBudget: N|null, paycheck: { am
 GET    /api/cashflow?months=12&by=category|group|merchant&start&end
 GET    /api/recurring?month=YYYY-MM     PATCH /api/recurring/:expense|income/:id { status }
 GET    /api/goals                       POST, PATCH/DELETE /:id, POST /:id/contributions
-GET    /api/settings
+GET    /api/settings                    PATCH /api/settings/preferences { tourCompleted }
 ```
 
 ---
@@ -290,7 +299,8 @@ src/
     importers/   adapter registry, file + OFX parsers, persistence
     detect/      recurrence engine, categorisation, reconciliation
     budget.js    budget, cash flow, breakdowns, spending pace, goals
-    plan/        paycheck plan: pay periods, recommended spending, goal impact (math.js is pure)
+    plan/        paycheck plan: pay periods, recommended spending, goal impact (math.js is pure),
+                 paycheck candidates from deposits (candidates.js)
     recurring.js calendar projection and paid/due matching
     transactions.js, accounts.js
 public/
