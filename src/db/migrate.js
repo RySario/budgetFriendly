@@ -6,6 +6,10 @@ const db = require('./index');
 
 const DIR = path.join(__dirname, 'migrations');
 
+// Forward-only migrations, applied in filename order, each in its own
+// transaction. A `.sql` file runs as-is; a `.js` file exports `up(q)` for the
+// migrations that need shared code (the category seed).
+
 async function run() {
   const problems = validate().filter((p) => p.includes('DATABASE_URL'));
   if (problems.length) {
@@ -23,15 +27,19 @@ async function run() {
   const applied = new Set(
     (await db.many('SELECT name FROM schema_migrations')).map((r) => r.name)
   );
-  const files = fs.readdirSync(DIR).filter((f) => f.endsWith('.sql')).sort();
+  const files = fs.readdirSync(DIR).filter((f) => /\.(sql|js)$/.test(f)).sort();
 
   for (const file of files) {
     if (applied.has(file)) continue;
-    const sql = fs.readFileSync(path.join(DIR, file), 'utf8');
+    const full = path.join(DIR, file);
     process.stdout.write(`[migrate] applying ${file} ... `);
-    await db.tx(async (client) => {
-      await client.query(sql);
-      await client.query('INSERT INTO schema_migrations (name) VALUES ($1)', [file]);
+    await db.tx(async (q) => {
+      if (file.endsWith('.js')) {
+        await require(full).up(q);
+      } else {
+        await q.query(fs.readFileSync(full, 'utf8'));
+      }
+      await q.query('INSERT INTO schema_migrations (name) VALUES ($1)', [file]);
     });
     console.log('done');
   }
