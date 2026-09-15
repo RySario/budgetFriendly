@@ -11,9 +11,16 @@ const { round2, sum } = require('../../utils/money');
 
 const LOOKBACK_DAYS = 400;
 
-async function loadWindow() {
+// Paychecks keep a steady cadence but not a steady amount — hours, overtime
+// and bonuses move it around — so income tolerates far more amount variation
+// than subscriptions do. Refunds and one-off reimbursements still fall out on
+// cadence regularity and the minimum amount.
+const INCOME_OPTIONS = { minOccurrences: 3, maxAmountVariation: 0.6, minRegularity: 0.6 };
+const MIN_INCOME_AMOUNT = 50;
+
+async function loadWindow(q) {
   const since = addDays(toISODate(new Date()), -LOOKBACK_DAYS);
-  return db.many(
+  return q.many(
     `SELECT t.id, t.posted_on, t.amount, t.description, t.merchant_key,
             t.category_id, t.excluded
        FROM transactions t
@@ -26,12 +33,13 @@ async function loadWindow() {
   );
 }
 
-async function refreshSubscriptions(txns) {
-  // Transfers and credit-card payments are recurring but are not subscriptions.
-  const transferIds = new Set(
-    (await db.many(`SELECT id FROM categories WHERE kind = 'transfer'`)).map((r) => r.id)
-  );
+async function transferCategoryIds(q) {
+  const rows = await q.many(`SELECT id FROM categories WHERE kind = 'transfer'`);
+  return new Set(rows.map((r) => r.id));
+}
 
+async function refreshSubscriptions(q, txns, transferIds) {
+  // Transfers and credit-card payments are recurring but are not bills.
   const candidates = detectRecurring(txns, 'out', { minOccurrences: 3 })
     .filter((s) => !transferIds.has(s.categoryId));
 
@@ -40,7 +48,7 @@ async function refreshSubscriptions(txns) {
 
   for (const s of candidates) {
     seen.add(s.merchantKey);
-    await db.query(
+    await q.query(
       `INSERT INTO subscriptions
          (merchant_key, name, amount, cadence, interval_days, monthly_amount,
           occurrences, confidence, first_seen_on, last_charged_on,
@@ -56,7 +64,9 @@ async function refreshSubscriptions(txns) {
          first_seen_on    = LEAST(subscriptions.first_seen_on, EXCLUDED.first_seen_on),
          last_charged_on  = EXCLUDED.last_charged_on,
          next_expected_on = EXCLUDED.next_expected_on,
-         category_id      = COALESCE(subscriptions.category_id, EXCLUDED.category_id),
+         category_id      = EXCLUDED.category_id,
+         status           = CASE WHEN subscriptions.status = 'cancelled'
+                                 THEN 'detected' ELSE subscriptions.status END,
          updated_at       = now()`,
       [
         s.merchantKey, s.name, s.amount, s.cadence, s.intervalDays, s.monthlyAmount,
@@ -66,49 +76,35 @@ async function refreshSubscriptions(txns) {
     );
   }
 
-  // A previously detected subscription that no longer shows a recurring pattern
-  // and has gone quiet is marked cancelled — unless the user confirmed it, in
-  // which case leave their decision alone.
-  const stale = await db.many(
-    `SELECT id, merchant_key, last_charged_on, interval_days, status
+  // A detected series that no longer recurs and has gone quiet is marked
+  // cancelled — unless the user confirmed it, in which case their call stands.
+  const stale = await q.many(
+    `SELECT id, merchant_key, last_charged_on, interval_days
        FROM subscriptions WHERE status = 'detected'`
   );
-  for (const row of stale) {
-    if (seen.has(row.merchant_key)) continue;
-    const gone = !isActive(
-      { lastSeenOn: toISODate(row.last_charged_on), intervalDays: row.interval_days },
-      today
+  const cancel = stale
+    .filter((row) => !seen.has(row.merchant_key))
+    .filter((row) => !isActive(
+      { lastSeenOn: toISODate(row.last_charged_on), intervalDays: row.interval_days }, today
+    ))
+    .map((row) => row.id);
+  if (cancel.length) {
+    await q.query(
+      `UPDATE subscriptions SET status = 'cancelled', updated_at = now() WHERE id = ANY($1::bigint[])`,
+      [cancel]
     );
-    if (gone) {
-      await db.query(
-        `UPDATE subscriptions SET status = 'cancelled', updated_at = now() WHERE id = $1`,
-        [row.id]
-      );
-    }
   }
 
   return candidates.length;
 }
 
-async function refreshIncome(txns) {
-  const transferIds = new Set(
-    (await db.many(`SELECT id FROM categories WHERE kind = 'transfer'`)).map((r) => r.id)
-  );
-
-  // Paychecks keep a steady cadence but not a steady amount — hours, overtime
-  // and bonuses move it around — so income tolerates far more amount variation
-  // than subscriptions do. Refunds and one-off reimbursements still fall out on
-  // cadence regularity and the minimum amount below.
-  const candidates = detectRecurring(txns, 'in', {
-    minOccurrences: 3,
-    maxAmountVariation: 0.6,
-    minRegularity: 0.6,
-  })
+async function refreshIncome(q, txns, transferIds) {
+  const candidates = detectRecurring(txns, 'in', INCOME_OPTIONS)
     .filter((s) => !transferIds.has(s.categoryId))
-    .filter((s) => s.amount >= 50);
+    .filter((s) => s.amount >= MIN_INCOME_AMOUNT);
 
   for (const s of candidates) {
-    await db.query(
+    await q.query(
       `INSERT INTO income_sources
          (merchant_key, name, amount, cadence, interval_days, monthly_amount,
           occurrences, confidence, first_seen_on, last_seen_on, next_expected_on, updated_at)
@@ -130,43 +126,48 @@ async function refreshIncome(txns) {
       ]
     );
   }
+
+  // Deposits behind a detected paycheck belong in Paychecks rather than the
+  // generic Other Income that unmatched inflows fall into.
+  if (candidates.length) {
+    const paychecks = await q.one(`SELECT id FROM categories WHERE name = 'Paychecks'`);
+    const other = await q.one(`SELECT id FROM categories WHERE name = 'Other Income'`);
+    if (paychecks) {
+      await q.query(
+        `UPDATE transactions SET category_id = $1
+          WHERE merchant_key = ANY($2::text[])
+            AND amount > 0
+            AND category_locked = false
+            AND (category_id IS NULL OR category_id = $3::bigint)`,
+        [paychecks.id, candidates.map((c) => c.merchantKey), other ? other.id : null]
+      );
+    }
+  }
+
   return candidates.length;
 }
 
-/**
- * Monthly income estimate: the manual override if one is set, otherwise the sum
- * of every active, non-dismissed recurring inflow normalised to a month.
- */
-async function estimateMonthlyIncome() {
-  const override = await db.one(`SELECT value FROM settings WHERE key = 'income_override'`);
-  const sources = await db.many(
+/** Detected monthly income: every active, non-dismissed recurring inflow. */
+async function estimateMonthlyIncome(q = db) {
+  const sources = await q.many(
     `SELECT * FROM income_sources WHERE status <> 'dismissed' ORDER BY monthly_amount DESC`
   );
   const today = toISODate(new Date());
   const active = sources.filter((s) =>
     isActive({ lastSeenOn: toISODate(s.last_seen_on), intervalDays: s.interval_days }, today)
   );
-
-  const detected = round2(sum(active.map((s) => s.monthly_amount)));
-  const manual = override && override.value && override.value.amount != null
-    ? round2(Number(override.value.amount))
-    : null;
-
   return {
-    detected,
-    manual,
-    effective: manual != null ? manual : detected,
-    isOverridden: manual != null,
+    detected: round2(sum(active.map((s) => s.monthly_amount))),
     sources: active,
-    inactiveSources: sources.filter((s) => !active.includes(s)),
   };
 }
 
-async function runDetection() {
-  const txns = await loadWindow();
-  const subs = await refreshSubscriptions(txns);
-  const income = await refreshIncome(txns);
+async function runDetection(q = db) {
+  const txns = await loadWindow(q);
+  const transferIds = await transferCategoryIds(q);
+  const subs = await refreshSubscriptions(q, txns, transferIds);
+  const income = await refreshIncome(q, txns, transferIds);
   return { transactionsScanned: txns.length, subscriptionsFound: subs, incomeSourcesFound: income };
 }
 
-module.exports = { runDetection, estimateMonthlyIncome, LOOKBACK_DAYS };
+module.exports = { runDetection, estimateMonthlyIncome, LOOKBACK_DAYS, INCOME_OPTIONS };

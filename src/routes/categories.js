@@ -1,85 +1,99 @@
 'use strict';
 const express = require('express');
 const db = require('../db');
-const { categorizeAll } = require('../services/detect/categorize');
-const { round2 } = require('../utils/money');
+const { categoryTree } = require('../services/budget');
 
 const router = express.Router();
 
 router.get('/', async (req, res, next) => {
   try {
-    const categories = await db.many(
-      `SELECT c.*, COUNT(t.id)::int AS transaction_count
-         FROM categories c
-         LEFT JOIN transactions t ON t.category_id = c.id
-        GROUP BY c.id
-        ORDER BY c.sort_order, c.name`
-    );
-    res.json({ categories });
+    res.json({ groups: await categoryTree() });
   } catch (err) { next(err); }
 });
 
 router.post('/', async (req, res, next) => {
   try {
-    const { name, kind, color, monthlyBudget, sortOrder } = req.body || {};
-    if (!name) return res.status(400).json({ error: 'name is required.' });
+    const { name, emoji, groupId } = req.body || {};
+    const trimmed = String(name || '').trim();
+    if (!trimmed) return res.status(400).json({ error: 'Give the category a name.' });
+
+    const group = await db.one('SELECT id, kind FROM category_groups WHERE id = $1', [Number(groupId)]);
+    if (!group) return res.status(400).json({ error: 'Choose a group for the category.' });
+
     const row = await db.one(
-      `INSERT INTO categories (name, kind, color, monthly_budget, sort_order)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO categories (name, emoji, group_id, kind, sort_order)
+       VALUES ($1, $2, $3, $4,
+               COALESCE((SELECT MAX(sort_order) + 1 FROM categories WHERE group_id = $3), 1000))
        ON CONFLICT (name) DO NOTHING
        RETURNING *`,
-      [
-        String(name).trim(),
-        kind || 'spending',
-        color || '#6b7280',
-        monthlyBudget == null || monthlyBudget === '' ? null : round2(Number(monthlyBudget)),
-        sortOrder == null ? 100 : Number(sortOrder),
-      ]
+      [trimmed, String(emoji || '').trim() || null, group.id, group.kind]
     );
     if (!row) return res.status(409).json({ error: 'A category with that name already exists.' });
-    res.status(201).json({ category: row });
+    res.status(201).json({ category: row, groups: await categoryTree() });
   } catch (err) { next(err); }
 });
 
 router.patch('/:id', async (req, res, next) => {
   try {
-    const { name, kind, color, monthlyBudget, sortOrder } = req.body || {};
+    const id = Number(req.params.id);
+    const cat = await db.one('SELECT * FROM categories WHERE id = $1', [id]);
+    if (!cat) return res.status(404).json({ error: 'Category not found.' });
+
+    const { name, emoji, groupId } = req.body || {};
     const sets = [];
-    const params = [req.params.id];
+    const params = [id];
 
-    if (name !== undefined) { params.push(String(name).trim()); sets.push(`name = $${params.length}`); }
-    if (kind !== undefined) { params.push(kind); sets.push(`kind = $${params.length}`); }
-    if (color !== undefined) { params.push(color); sets.push(`color = $${params.length}`); }
-    if (monthlyBudget !== undefined) {
-      params.push(monthlyBudget === null || monthlyBudget === '' ? null : round2(Number(monthlyBudget)));
-      sets.push(`monthly_budget = $${params.length}`);
+    if (emoji !== undefined) {
+      params.push(String(emoji || '').trim() || null);
+      sets.push(`emoji = $${params.length}`);
     }
-    if (sortOrder !== undefined) { params.push(Number(sortOrder)); sets.push(`sort_order = $${params.length}`); }
-    if (!sets.length) return res.status(400).json({ error: 'Nothing to update.' });
+    if (name !== undefined && String(name).trim() !== cat.name) {
+      if (cat.is_system) return res.status(400).json({ error: 'Built-in categories cannot be renamed.' });
+      const trimmed = String(name).trim();
+      if (!trimmed) return res.status(400).json({ error: 'Give the category a name.' });
+      params.push(trimmed);
+      sets.push(`name = $${params.length}`);
+    }
+    if (groupId !== undefined && Number(groupId) !== cat.group_id) {
+      if (cat.is_system) return res.status(400).json({ error: 'Built-in categories cannot be moved.' });
+      const group = await db.one('SELECT id, kind FROM category_groups WHERE id = $1', [Number(groupId)]);
+      if (!group) return res.status(400).json({ error: 'That group does not exist.' });
+      params.push(group.id);
+      sets.push(`group_id = $${params.length}`);
+      params.push(group.kind);
+      sets.push(`kind = $${params.length}`);
+    }
+    if (!sets.length) return res.json({ groups: await categoryTree() });
 
-    const row = await db.one(
-      `UPDATE categories SET ${sets.join(', ')} WHERE id = $1 RETURNING *`,
-      params
-    );
-    if (!row) return res.status(404).json({ error: 'Category not found.' });
-    res.json({ category: row });
+    try {
+      await db.query(`UPDATE categories SET ${sets.join(', ')} WHERE id = $1`, params);
+    } catch (err) {
+      if (err.code === '23505') return res.status(409).json({ error: 'A category with that name already exists.' });
+      throw err;
+    }
+    res.json({ groups: await categoryTree() });
   } catch (err) { next(err); }
 });
 
 router.delete('/:id', async (req, res, next) => {
   try {
-    const cat = await db.one('SELECT * FROM categories WHERE id = $1', [req.params.id]);
+    const id = Number(req.params.id);
+    const cat = await db.one('SELECT * FROM categories WHERE id = $1', [id]);
     if (!cat) return res.status(404).json({ error: 'Category not found.' });
     if (cat.is_system) return res.status(400).json({ error: 'Built-in categories cannot be deleted.' });
 
-    // Transactions fall back to Uncategorized rather than losing their category.
-    const fallback = await db.one(`SELECT id FROM categories WHERE name = 'Uncategorized'`);
-    await db.query(
-      'UPDATE transactions SET category_id = $1, category_locked = false WHERE category_id = $2',
-      [fallback ? fallback.id : null, cat.id]
-    );
-    await db.query('DELETE FROM categories WHERE id = $1', [cat.id]);
-    res.json({ ok: true });
+    // Its transactions fall back to the catch-all for their kind, unlocked so
+    // rules can place them again on the next import.
+    const fallbackName = cat.kind === 'income' ? 'Other Income' : 'Uncategorized';
+    await db.tx(async (q) => {
+      const fallback = await q.one('SELECT id FROM categories WHERE name = $1', [fallbackName]);
+      await q.query(
+        'UPDATE transactions SET category_id = $1, category_locked = false WHERE category_id = $2',
+        [fallback ? fallback.id : null, id]
+      );
+      await q.query('DELETE FROM categories WHERE id = $1', [id]);
+    });
+    res.json({ groups: await categoryTree() });
   } catch (err) { next(err); }
 });
 
@@ -88,39 +102,18 @@ router.delete('/:id', async (req, res, next) => {
 router.get('/rules/all', async (req, res, next) => {
   try {
     const rules = await db.many(
-      `SELECT r.*, c.name AS category_name, c.color AS category_color
+      `SELECT r.id, r.pattern, r.match_type, r.priority, r.auto,
+              c.id AS category_id, c.name AS category_name, c.emoji AS category_emoji
          FROM category_rules r JOIN categories c ON c.id = r.category_id
-        ORDER BY r.priority DESC, c.name, r.pattern`
+        ORDER BY r.auto DESC, r.priority DESC, r.pattern`
     );
     res.json({ rules });
   } catch (err) { next(err); }
 });
 
-router.post('/rules', async (req, res, next) => {
-  try {
-    const { categoryId, pattern, matchType, priority } = req.body || {};
-    if (!categoryId || !pattern) {
-      return res.status(400).json({ error: 'categoryId and pattern are required.' });
-    }
-    if (matchType === 'regex') {
-      try { new RegExp(pattern); }
-      catch (e) { return res.status(400).json({ error: `Invalid regex: ${e.message}` }); }
-    }
-    const row = await db.one(
-      `INSERT INTO category_rules (category_id, match_type, pattern, priority)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (category_id, match_type, pattern) DO UPDATE SET priority = EXCLUDED.priority
-       RETURNING *`,
-      [categoryId, matchType || 'contains', String(pattern).trim(), priority == null ? 200 : Number(priority)]
-    );
-    const updated = await categorizeAll({ onlyUncategorised: false });
-    res.status(201).json({ rule: row, recategorised: updated });
-  } catch (err) { next(err); }
-});
-
 router.delete('/rules/:ruleId', async (req, res, next) => {
   try {
-    await db.query('DELETE FROM category_rules WHERE id = $1', [req.params.ruleId]);
+    await db.query('DELETE FROM category_rules WHERE id = $1', [Number(req.params.ruleId)]);
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
