@@ -1,18 +1,22 @@
 /* Service worker: keeps the app shell available so the home-screen icon opens
-   instantly and survives a dropped connection. Network first — a fresh deploy
-   is picked up on the next load, never a mix of old and new modules. API
-   responses are never cached: a stale balance is worse than an honest error. */
+   instantly and survives a dropped connection. Network first, and every asset
+   request revalidates with the server rather than trusting the browser's HTTP
+   cache — a fresh deploy is picked up on the next load, never a mix of old and
+   new modules. API responses are never cached: a stale balance is worse than an
+   honest error. */
 
-const VERSION = 'bf-v3';
+const VERSION = 'bf-v4';
 const SHELL = [
   '/',
   '/index.html',
   '/styles.css',
   '/manifest.webmanifest',
+  '/js/theme.js',
   '/js/main.js',
   '/js/api.js',
   '/js/format.js',
   '/js/ui.js',
+  '/js/tour.js',
   '/js/charts.js',
   '/js/views/dashboard.js',
   '/js/views/plan.js',
@@ -49,8 +53,11 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith('/api/') || url.pathname === '/healthz') return;
 
+  // A navigation request can't be re-issued with options; the server marks
+  // the page no-cache, so it revalidates anyway.
+  const network = request.mode === 'navigate' ? fetch(request) : fetch(request, { cache: 'no-cache' });
   event.respondWith(
-    fetch(request)
+    network
       .then((res) => {
         if (res && res.ok) {
           const copy = res.clone();

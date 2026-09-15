@@ -86,6 +86,7 @@ const server = app.listen(0, async () => {
     for (const asset of ['/styles.css', '/js/main.js', '/js/charts.js', '/js/views/dashboard.js',
       '/js/views/transactions.js', '/js/views/cashflow.js', '/js/views/budget.js', '/js/views/recurring.js',
       '/js/views/accounts.js', '/js/views/goals.js', '/js/views/settings.js', '/js/views/plan.js',
+      '/js/theme.js', '/js/tour.js',
       '/manifest.webmanifest']) {
       const r = await call(asset);
       check(`serves ${asset}`, r.res.status === 200, String(r.res.status));
@@ -123,6 +124,18 @@ const server = app.listen(0, async () => {
     check('plan rejects an unknown pay cadence', badPaycheck.res.status === 400, String(badPaycheck.res.status));
     const badBudget = await call('/api/plan', { method: 'PATCH', json: { spendingBudget: -5 } });
     check('plan rejects a negative spending budget', badBudget.res.status === 400, String(badBudget.res.status));
+    const noIncome = await call('/api/plan');
+    check('plan without a paycheck explains what it looked at', noIncome.body.ready === false
+      && Array.isArray(noIncome.body.diagnosis.candidates), JSON.stringify(noIncome.body).slice(0, 200));
+
+    const badPrefs = await call('/api/settings/preferences', { method: 'PATCH', json: {} });
+    check('preferences reject an empty update', badPrefs.res.status === 400, String(badPrefs.res.status));
+    const prefs = await call('/api/settings/preferences', { method: 'PATCH', json: { tourCompleted: true } });
+    check('preferences record the finished tour', prefs.res.status === 200 && !!prefs.body.preferences.tourCompletedAt,
+      JSON.stringify(prefs.body));
+    const js = await call('/js/main.js');
+    check('code revalidates on every load', /no-cache/.test(js.res.headers.get('cache-control') || ''),
+      js.res.headers.get('cache-control'));
 
     const badMonth = await call('/api/budget?month=2026-13');
     check('budget rejects a bad month', badMonth.res.status === 400, String(badMonth.res.status));
