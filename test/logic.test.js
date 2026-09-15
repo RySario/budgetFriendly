@@ -161,5 +161,60 @@ check('semimonthly detected', semiOut[0] && semiOut[0].cadence === 'semimonthly'
 check('semimonthly monthly = 2x', semiOut[0] && semiOut[0].monthlyAmount === 3600,
   String(semiOut[0]?.monthlyAmount));
 
+// --- Golden 1 description formats (OFX NAME capped at 32 characters) -------
+for (const [raw, want] of [
+  ['WITHDRAWAL AT SQ *BLUE BOTTLE CO', 'BLUE BOTTLE'],
+  ['CHECKING DEPOSIT AT G1 ONLINE TR', 'G1 ONLINE TR'],
+  ['WITHDRAWAL @ G1 ONLINE TRANSFER', 'G1 ONLINE TRANSFER'],
+  ['CHECKING DEPOSIT-ACH-1064831 ACME PAYROLL', 'ACME PAYROLL'],
+  ['CHECKING DEPOSIT-ACH-A-1218243 VENMO', 'VENMO'],
+  ['WITHDRAWAL-ACH-A-1218243 NETFLIX', 'NETFLIX'],
+  ['WITHDRAWAL REVERSAL AT HOLLISTER', 'HOLLISTER'],
+  // No wrapper: a leading "AT" is part of the name and must survive.
+  ['AT HOME STORE', 'AT HOME STORE'],
+  ['AT&T MOBILITY', 'AT&T MOBILITY'],
+]) {
+  const got = normaliseMerchant(raw);
+  check(`normalise "${raw}"`, got === want, `got "${got}", want "${want}"`);
+}
+check('Golden 1 wrapper then processor prefix',
+  normaliseMerchant('WITHDRAWAL AT STEAMGAMES.COM 425').startsWith('STEAMGAMES'),
+  normaliseMerchant('WITHDRAWAL AT STEAMGAMES.COM 425'));
+
+// --- Variable paychecks still count as income --------------------------------
+// Hourly pay moves the amount (coefficient of variation ~0.42 here) while the
+// cadence stays exact. Income detection in src/services/detect/index.js allows
+// 0.6; the subscription limit of 0.35 would wrongly reject it.
+const payAmounts = [900, 2600, 1200, 2900, 1000, 2400, 3100, 1100, 2700, 1500, 2800, 950, 2200];
+const pay = series('CHECKING DEPOSIT-ACH-1064831 ACME PAYROLL', 0, 2, 14, payAmounts.length)
+  .map((t, i) => ({ ...t, amount: payAmounts[i] }));
+const payIncome = detectRecurring(pay, 'in', { minOccurrences: 3, maxAmountVariation: 0.6 });
+check('variable biweekly paycheck detected as income',
+  payIncome.length === 1 && payIncome[0].cadence === 'biweekly',
+  JSON.stringify(payIncome.map((p) => [p.name, p.cadence, p.amountVariation])));
+check('same paycheck rejected at the subscription amount limit',
+  detectRecurring(pay, 'in', { minOccurrences: 3, maxAmountVariation: 0.35 }).length === 0,
+  'detected anyway');
+
+// --- Date objects, the shape node-postgres returns by default -------------
+// Regression: a Date stringified and cut to 10 chars became "Tue Aug 04",
+// which Postgres rejected when detection wrote it back.
+const asDates = series('HULU 877-824-4858 CA', -17.99, 4, 30, 5).map((t) => {
+  const [y, m, d] = t.posted_on.split('-').map(Number);
+  return { ...t, posted_on: new Date(y, m - 1, d) };
+});
+// Two charges on one day must merge into a single event. The extra charge is a
+// cent so the merged amount stays within the amount-variation limit.
+asDates.push({ ...asDates[asDates.length - 1], amount: -0.01 });
+const fromDates = detectRecurring(asDates, 'out', { minOccurrences: 3 });
+const hulu = fromDates[0];
+const isoRe = /^\d{4}-\d{2}-\d{2}$/;
+check('Date inputs still detected', !!hulu, JSON.stringify(fromDates));
+check('Date inputs yield ISO first/last/next dates',
+  hulu && isoRe.test(hulu.firstSeenOn) && isoRe.test(hulu.lastSeenOn) && isoRe.test(hulu.nextExpectedOn),
+  hulu && [hulu.firstSeenOn, hulu.lastSeenOn, hulu.nextExpectedOn].join(' | '));
+check('same-day charges from Date inputs collapse', hulu && hulu.occurrences === 5,
+  hulu && String(hulu.occurrences));
+
 console.log(`\n${failures === 0 ? 'ALL PASSED' : `${failures} FAILURE(S)`}`);
 process.exit(failures ? 1 : 0);

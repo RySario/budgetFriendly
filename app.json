@@ -1,0 +1,17 @@
+{
+  "name": "budgetfriendly",
+  "description": "Single-user personal budgeting app.",
+  "healthchecks": {
+    "web": [
+      {
+        "type": "startup",
+        "name": "healthz",
+        "description": "App is up and can reach Postgres",
+        "path": "/healthz",
+        "attempts": 10,
+        "wait": 3,
+        "timeout": 5
+      }
+    ]
+  }
+}
