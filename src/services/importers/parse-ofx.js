@@ -145,9 +145,11 @@ function extractStatements(tree) {
 
     accounts.push({
       externalId: acctId,
+      // The last four digits travel separately as `mask`; the UI shows them
+      // next to the name, so they are not repeated in it.
       name: kind === 'credit'
-        ? `Credit Card ****${acctId.slice(-4)}`
-        : `${acctType ? acctType[0] + acctType.slice(1).toLowerCase() : 'Account'} ****${acctId.slice(-4)}`,
+        ? 'Credit card'
+        : ({ CHECKING: 'Checking', SAVINGS: 'Savings', MONEYMRKT: 'Money market', CREDITLINE: 'Credit line', CD: 'Certificate' }[acctType] || 'Account'),
       type: kind,
       subtype: acctType ? acctType.toLowerCase() : null,
       mask: acctId.slice(-4),

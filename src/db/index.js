@@ -23,25 +23,25 @@ pool.on('error', (err) => {
   console.error('[db] idle client error', err.message);
 });
 
-async function query(text, params) {
-  return pool.query(text, params);
+/**
+ * The query helpers bound to one runner — the pool, or a single client inside
+ * a transaction. Services take one of these as `q` so the same code runs
+ * standalone or as part of a larger atomic unit of work.
+ */
+function scope(runner) {
+  return {
+    query: (text, params) => runner.query(text, params),
+    one: async (text, params) => (await runner.query(text, params)).rows[0] || null,
+    many: async (text, params) => (await runner.query(text, params)).rows,
+  };
 }
 
-async function one(text, params) {
-  const { rows } = await pool.query(text, params);
-  return rows[0] || null;
-}
-
-async function many(text, params) {
-  const { rows } = await pool.query(text, params);
-  return rows;
-}
-
+/** Run fn(q) inside BEGIN/COMMIT; any throw rolls the whole unit back. */
 async function tx(fn) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const out = await fn(client);
+    const out = await fn(scope(client));
     await client.query('COMMIT');
     return out;
   } catch (err) {
@@ -52,4 +52,4 @@ async function tx(fn) {
   }
 }
 
-module.exports = { pool, query, one, many, tx };
+module.exports = { pool, ...scope(pool), tx, scope };

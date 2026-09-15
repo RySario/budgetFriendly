@@ -216,5 +216,17 @@ check('Date inputs yield ISO first/last/next dates',
 check('same-day charges from Date inputs collapse', hulu && hulu.occurrences === 5,
   hulu && String(hulu.occurrences));
 
+// --- Recurring calendar projection --------------------------------------------
+const { expectedDates } = require('../src/services/recurring');
+const monthEnd = expectedDates('2026-01-31', 'monthly', 30, '2026-02-01', '2026-04-30');
+check('monthly bill on the 31st lands on each short month\'s last day',
+  JSON.stringify(monthEnd) === JSON.stringify(['2026-02-28', '2026-03-31', '2026-04-30']), JSON.stringify(monthEnd));
+const biweekly = expectedDates('2026-09-11', 'biweekly', 14, '2026-09-01', '2026-09-30');
+check('biweekly paycheck projects into the month from its last date',
+  JSON.stringify(biweekly) === JSON.stringify(['2026-09-11', '2026-09-25']), JSON.stringify(biweekly));
+const backward = expectedDates('2026-09-11', 'biweekly', 14, '2026-08-01', '2026-08-31');
+check('projection also walks backward into past months',
+  JSON.stringify(backward) === JSON.stringify(['2026-08-14', '2026-08-28']), JSON.stringify(backward));
+
 console.log(`\n${failures === 0 ? 'ALL PASSED' : `${failures} FAILURE(S)`}`);
 process.exit(failures ? 1 : 0);

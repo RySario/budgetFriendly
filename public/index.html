@@ -5,13 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>BudgetFriendly</title>
   <meta name="description" content="Personal budgeting.">
-  <meta name="theme-color" content="#0f172a">
+  <meta name="theme-color" content="#f7f7f5" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)">
   <meta name="color-scheme" content="light dark">
 
   <!-- iOS home-screen behaviour: full-screen, no Safari chrome. -->
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="Budget">
   <link rel="apple-touch-icon" href="/icons/icon-180.png">
 
@@ -20,71 +21,55 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <div id="app" class="app" hidden>
-    <aside class="sidebar">
-      <div class="brand">
-        <span class="brand-mark" aria-hidden="true"></span>
-        <span class="brand-name">BudgetFriendly</span>
-      </div>
-      <nav class="nav" id="desktop-nav"></nav>
-      <div class="sidebar-foot">
-        <button class="btn btn-ghost btn-sm" id="sync-btn">Sync now</button>
-        <button class="btn btn-ghost btn-sm" id="logout-btn">Sign out</button>
-      </div>
-    </aside>
-
-    <main class="main">
-      <header class="topbar">
-        <h1 class="view-title" id="view-title">Dashboard</h1>
-        <div class="topbar-actions">
-          <button class="btn btn-ghost btn-icon" id="sync-btn-mobile" aria-label="Sync now">
-            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-              <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                    d="M20 11a8 8 0 1 0-.6 3M20 5v6h-6"/>
-            </svg>
-          </button>
-          <a class="btn btn-ghost btn-icon" href="#/settings" aria-label="Settings">
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
-                 stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
-              <circle cx="12" cy="12" r="3"/>
-              <path d="M12 2v3m0 14v3M2 12h3m14 0h3M5 5l2 2m10 10 2 2M19 5l-2 2M7 17l-2 2"/>
-            </svg>
-          </a>
-        </div>
-      </header>
-
-      <div class="content" id="content"></div>
-    </main>
-
-    <nav class="tabbar" id="mobile-nav"></nav>
-  </div>
-
   <div id="login" class="login" hidden>
     <form class="login-card" id="login-form">
-      <div class="brand brand-lg">
-        <span class="brand-mark" aria-hidden="true"></span>
-        <span class="brand-name">BudgetFriendly</span>
-      </div>
-      <p class="muted">Sign in to your budget.</p>
+      <div class="brand brand-lg"><span class="brand-mark" aria-hidden="true"></span>BudgetFriendly</div>
       <label class="field">
-        <span>Email</span>
-        <input type="email" name="email" autocomplete="username" required inputmode="email">
+        <span class="field-label">Email</span>
+        <input type="email" name="email" autocomplete="username" inputmode="email" required>
       </label>
       <label class="field">
-        <span>Password</span>
+        <span class="field-label">Password</span>
         <input type="password" name="password" autocomplete="current-password" required>
       </label>
-      <p class="error" id="login-error" hidden></p>
+      <p class="form-error" id="login-error" hidden></p>
       <button class="btn btn-primary btn-block" type="submit">Sign in</button>
     </form>
   </div>
 
-  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <div id="app" class="shell" hidden>
+    <aside class="sidebar" aria-label="Main">
+      <a class="brand" href="#/dashboard"><span class="brand-mark" aria-hidden="true"></span>BudgetFriendly</a>
+      <nav class="side-nav" id="side-nav"></nav>
+      <div class="side-foot">
+        <button class="btn btn-primary btn-block" type="button" data-action="upload" id="side-upload"></button>
+      </div>
+    </aside>
 
-  <dialog id="sheet" class="sheet">
-    <div class="sheet-inner" id="sheet-body"></div>
-  </dialog>
+    <div class="main">
+      <header class="topbar">
+        <div class="topbar-title">
+          <h1 id="page-title">Dashboard</h1>
+        </div>
+        <div class="topbar-actions" id="page-actions"></div>
+        <button class="icon-btn only-mobile" type="button" data-action="upload" aria-label="Upload statement" id="top-upload"></button>
+      </header>
+      <main id="content" class="content" tabindex="-1"></main>
+    </div>
 
-  <script src="/app.js" type="module"></script>
+    <nav class="tabbar" id="tabbar" aria-label="Main"></nav>
+  </div>
+
+  <div class="scrim" id="scrim" hidden></div>
+  <aside class="drawer" id="drawer" hidden role="dialog" aria-modal="true" aria-labelledby="drawer-title"></aside>
+  <div class="modal-layer" id="modal-layer" hidden>
+    <div class="modal" id="modal" role="dialog" aria-modal="true"></div>
+  </div>
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+  <div class="dropzone" id="dropzone" hidden><div class="dropzone-inner">Drop your statement to import it</div></div>
+  <div class="chart-tooltip" id="chart-tooltip" hidden></div>
+  <input type="file" id="file-input" accept=".ofx,.qfx,.csv,.txt" hidden>
+
+  <script type="module" src="/js/main.js"></script>
 </body>
 </html>

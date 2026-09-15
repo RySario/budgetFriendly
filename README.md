@@ -1,279 +1,80 @@
 # BudgetFriendly
 
-A single-user personal budgeting app. Node + Express + Postgres on the back,
-a no-build responsive PWA on the front. Deploys to Dokku as-is.
+A single-user personal finance app, laid out like Monarch Money, fed by the
+statements you download from your bank. Node + Express + Postgres, a no-build
+responsive PWA, deployed on Dokku.
 
-It pulls your transactions in, works out what your income is, spots your
-recurring charges, sorts spending into categories, and tells you whether the
-month and your goals are on track.
+- **Dashboard** — spending this month against last month, budget progress,
+  upcoming bills and paychecks, recent transactions, accounts, goals
+- **Transactions** — grouped by day, searchable and filterable; open one to
+  change its category, teach a merchant rule, add a note, or hide it
+- **Cash Flow** — income against expenses by month, savings rate, and a
+  breakdown by category, group or merchant that drills into transactions
+- **Budget** — a monthly amount per category, grouped, with spent and remaining
+- **Recurring** — detected bills and paychecks as a list or calendar, each
+  marked paid, due, upcoming or not found
+- **Accounts** and **Goals**
 
-**No Plaid.** Transactions come in through pluggable *import adapters* — see
-[Getting your transactions in](#getting-your-transactions-in).
+No bank logins, no aggregator. You download a statement and upload it.
 
 ---
 
 ## Contents
 
-- [Quick start](#quick-start)
-- [Testing locally with sample data](#testing-locally-with-sample-data)
 - [Getting your transactions in](#getting-your-transactions-in)
-  - [Option A — statement upload](#option-a--statement-upload-works-immediately)
-  - [Option B — OFX Direct Connect](#option-b--ofx-direct-connect-log-in-and-sync)
-  - [Option C — web automation](#option-c--web-automation-not-implemented)
+- [Running it locally](#running-it-locally)
 - [Deploying to Dokku](#deploying-to-dokku)
-- [How the features work](#how-the-features-work)
+- [Starting over](#starting-over)
+- [How it works](#how-it-works)
+- [Tests](#tests)
 - [Environment variables](#environment-variables)
 - [API](#api)
 - [Project layout](#project-layout)
-- [Tests](#tests)
-- [Adding another institution](#adding-another-institution)
-
----
-
-## Quick start
-
-You need Node 24 (the pinned LTS; newer works locally) and a Postgres database.
-
-```bash
-git clone <this repo> && cd budgetFriendly
-npm install
-
-cp .env.example .env
-# Fill in at minimum: DATABASE_URL, SESSION_SECRET, ENCRYPTION_KEY,
-#                     ADMIN_EMAIL, ADMIN_PASSWORD
-openssl rand -hex 32     # use for SESSION_SECRET
-openssl rand -hex 32     # use for ENCRYPTION_KEY (must be 64 hex chars)
-
-npm run migrate          # creates the schema + seeds starter categories
-npm start
-```
-
-Open <http://localhost:3000> and sign in with `ADMIN_EMAIL` / `ADMIN_PASSWORD`.
-
-The single user account is created automatically on first boot. There is no
-signup route — deliberately, since this is a one-person app. To create or reset
-the account later:
-
-```bash
-npm run create-user -- you@example.com 'a-long-password'
-```
-
-### Installing it on your iPhone
-
-Open the app in Safari → Share → **Add to Home Screen**. It runs full-screen
-with no browser chrome, keeps its own icon, and the service worker caches the
-shell so it opens instantly and survives a dead connection. API responses are
-never cached — a stale balance is worse than an honest error.
-
-You need HTTPS for the service worker to register (`localhost` is exempt).
-Dokku's Let's Encrypt plugin handles this; see below.
-
----
-
-## Testing locally with sample data
-
-A full local run, start to finish, with no bank involved.
-
-### 1. Get a Postgres
-
-On Windows, the shortest path:
-
-```powershell
-winget install PostgreSQL.PostgreSQL.17
-```
-
-The installer asks for a **superuser password** — remember it, it goes in
-`.env`. Afterwards add the tools to your PATH for the current shell:
-
-```powershell
-$env:Path += ';C:\Program Files\PostgreSQL\17\bin'
-```
-
-Then create the database:
-
-```bash
-createdb -U postgres budgetfriendly
-# or: psql -U postgres -c "CREATE DATABASE budgetfriendly;"
-```
-
-No appetite for installing a database? A free hosted Postgres (Neon, Supabase)
-works identically — paste their connection string into `DATABASE_URL` and set
-`PGSSLMODE=require`.
-
-### 2. Fill in `.env`
-
-Copy `.env.example` to `.env` and set five values:
-
-| Variable | What to put |
-|---|---|
-| `DATABASE_URL` | `postgres://postgres:YOUR_PASSWORD@localhost:5432/budgetfriendly` |
-| `SESSION_SECRET` | `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
-| `ENCRYPTION_KEY` | same command again — a *different* 64-hex value |
-| `ADMIN_EMAIL` | whatever you want to log in as |
-| `ADMIN_PASSWORD` | your login password, 8+ characters |
-
-Everything else has a working default. The `OFX_*` variables can stay empty —
-the app runs fine without them, and statement upload needs none of them.
-
-### 3. Run it
-
-```bash
-npm install
-npm run migrate      # creates the schema, seeds categories and merchant rules
-npm start
-```
-
-Open <http://localhost:3000> and sign in.
-
-### 4. Load the sample statement
-
-```bash
-npm run make-sample
-```
-
-This writes `samples/sample-statement.qfx` and `.csv` covering the last five
-months. The data is built to exercise the detectors — biweekly payroll, seven
-monthly bills (several with deliberately wobbly billing dates), a utility whose
-amount changes every month, monthly transfers to savings, and a few hundred
-irregular grocery/dining/shopping charges that should *not* be mistaken for
-subscriptions.
-
-In the app: **Settings → Add a connection →** *Statement upload* → name it
-anything → **Upload** → pick `samples/sample-statement.qfx`.
-
-You should land on a dashboard with roughly $5,300/month detected income, nine
-or so detected subscriptions awaiting your confirmation, spending split across
-categories, and five months of trend history. Upload the same file twice to
-watch de-duplication work — the second import reports 0 new.
-
-Try the CSV too. It carries no transaction IDs, so it de-duplicates on a
-content fingerprint instead; create it as a *separate* connection if you want
-both in at once, otherwise the two files collide by design.
-
-### 5. Run the test suites
-
-```bash
-npm test
-```
-
-Needs no database and no network.
 
 ---
 
 ## Getting your transactions in
 
-Every bank source implements the same small adapter contract, so the detection,
-categorisation and budgeting code never knows or cares where a transaction came
-from. Three adapters ship:
-
-| Adapter | Sync on demand | Stores credentials | Status |
-|---|---|---|---|
-| `file` — statement upload | no | no | **works today** |
-| `ofx` — Direct Connect | yes | yes (encrypted) | works if your institution runs an OFX server |
-| `web` — browser automation | yes | yes (encrypted) | extension point, not implemented |
-
-### Option A — statement upload (works immediately)
-
-The reliable path, and the one to start with.
-
 1. Sign in to Golden 1 online banking.
-2. Open an account and find **Export** / **Download transactions**.
-3. Choose **Quicken (QFX)** if offered, otherwise **CSV**.
-4. In BudgetFriendly: **Settings → Add a connection →** *Statement upload* →
-   **Upload**.
+2. Open an account and click the download (cloud) icon.
+3. Choose **OFX** (or **Quicken**) and a date range. The first time, take as
+   much history as it allows — recurring detection needs at least three months.
+4. In BudgetFriendly, click **Upload statement** (or drag the file onto the
+   window on desktop).
 
-Prefer QFX over CSV. QFX carries the bank's own transaction IDs (`FITID`), so
-re-importing overlapping date ranges de-duplicates perfectly. CSV files are
-de-duplicated on a content fingerprint (account + date + amount + description),
-which is very good but not airtight — two genuinely identical charges on the
-same day collapse into one.
+Upload overlapping date ranges freely. Every OFX transaction carries the bank's
+own ID, so anything already imported is skipped. New transactions arrive marked
+**Needs review**.
 
-The CSV reader sniffs columns by meaning rather than position, so it copes with
-the usual variations:
+CSV works too, but prefer OFX: CSV has no transaction IDs, so duplicates are
+detected by date, amount and description instead.
 
-- a `Date` / `Posted Date` / `Transaction Date` column, in `M/D/YYYY`,
-  `YYYY-MM-DD` or similar
-- either a single signed `Amount` column, or separate `Debit` / `Credit`
-  columns
-- an optional `Type` column (`DEBIT`/`CREDIT`) used to sign unsigned amounts
-- metadata preamble rows above the real header
+**Why not automatic sync?** Golden 1 retired OFX Direct Connect in favour of
+Quicken's aggregator-only Express Web Connect, which third-party apps cannot
+use. The adapter code for Direct Connect is still in
+`src/services/importers/ofx.js` for institutions that support it, but the app
+only exposes uploads.
 
-### Option B — OFX Direct Connect (log in and sync)
+---
 
-This is the "just log in and have my finances there" path, without screen
-scraping. OFX Direct Connect is the protocol Quicken and Microsoft Money used,
-and many credit unions still run a server for it. You store your credentials
-once, and **Sync now** posts a signed OFX request straight to the institution's
-endpoint and reads the statement back. It is a real API — nothing breaks when
-the bank restyles its website.
+## Running it locally
 
-**You must supply four institution-specific values.** This repo does not ship
-them, because publishing a guessed endpoint for someone's bank is how you end
-up posting your credentials somewhere unintended. Get them from one of:
-
-- <https://www.ofxhome.com/> — a community directory; search for your
-  institution and read off `URL`, `ORG`, `FID`
-- your institution's own Quicken / Direct Connect setup documentation
-- calling them and asking for their Direct Connect settings
-
-`OFX_BANK_ID` is your account's routing number, which is printed on your
-cheques and shown in online banking.
+You need Node 24 and Postgres with a **UTF8** database (category names use emoji).
 
 ```bash
-OFX_URL=https://...        # the OFX server endpoint
-OFX_FI_ORG=...             # the FI "ORG" string
-OFX_FI_ID=...              # the FI "FID" number
-OFX_BANK_ID=...            # your routing number
+npm install
+cp .env.example .env        # set DATABASE_URL, SESSION_SECRET, ADMIN_EMAIL, ADMIN_PASSWORD
+npm run migrate
+npm start                   # http://localhost:3000
 ```
 
-Then: **Settings → Add a connection →** *Direct Connect (OFX)* → enter your
-online-banking username and password → **Sync**.
+Your login is created from `ADMIN_EMAIL` / `ADMIN_PASSWORD` the first time the
+app starts. There is no signup. To create or reset it later:
+`npm run create-user -- you@example.com 'a-long-password'`.
 
-Things to know before you rely on this:
-
-- **Many institutions gate Direct Connect.** It often has to be enabled on your
-  account first, and some issue a **separate Direct Connect PIN** rather than
-  accepting your web password. If sign-on fails with OFX code `15500`, that is
-  the usual cause.
-- **Some institutions have retired OFX entirely.** If yours has, Option A is
-  your path. That is not a bug in this app.
-- Credentials are encrypted with AES-256-GCM under `ENCRYPTION_KEY` before they
-  touch the database. The key lives in the environment, never in Postgres. Lose
-  or rotate it and you simply re-enter the credentials.
-- Sync pulls `OFX_SYNC_DAYS` (default 90) of history each time and de-duplicates
-  on `FITID`, so syncing often is cheap and safe.
-
-**Testing before you point it at a real bank.** There is no public OFX sandbox,
-so validate the pipeline with a file instead — it exercises the same parser,
-the same persistence, the same detection:
-
-```bash
-npm test                 # includes a full OFX 1.x SGML fixture end-to-end
-```
-
-Or download one real QFX from online banking and upload it through Option A.
-If the transactions land correctly, everything downstream of the adapter is
-proven; only the HTTP conversation with the institution is left to verify.
-
-### Option C — web automation (not implemented)
-
-Golden 1 publishes no web API, so the only way to "log in" beyond OFX is to
-drive their website in a headless browser. `src/services/importers/web.js` is
-the extension point, with the adapter contract and a Playwright sketch in the
-comments. It ships disabled.
-
-Read the file before you build it out. The short version of why it is last on
-this list:
-
-- it breaks whenever they change their markup, unannounced
-- MFA fires on every new "device", so an automated login sits at a challenge
-  screen unless you handle the code out-of-band
-- bot detection can lock the account rather than just fail the login
-- your banking password has to sit on disk in a form the app can replay
-
-If you do implement it, the shortcut worth taking is to scrape only as far as
-the **export button**, download the QFX, and hand the bytes to
-`parse-ofx.js` — never scrape the transaction table itself.
+`npm run make-sample` writes `samples/sample-statement.qfx`: five months of
+synthetic transactions with a biweekly paycheck, monthly bills and irregular
+spending, for trying the app without real data.
 
 ---
 
@@ -282,133 +83,139 @@ the **export button**, download the QFX, and hand the bytes to
 ```bash
 # on the Dokku host
 dokku apps:create budgetfriendly
-dokku postgres:create budgetfriendly-db
-dokku postgres:link budgetfriendly-db budgetfriendly   # sets DATABASE_URL
+sudo dokku plugin:install https://github.com/dokku/dokku-postgres.git postgres
+dokku postgres:create budgetfriendly_db
+dokku postgres:link budgetfriendly_db budgetfriendly       # sets DATABASE_URL
 
-dokku config:set budgetfriendly \
-  NODE_ENV=production \
-  SESSION_SECRET="$(openssl rand -hex 32)" \
-  ENCRYPTION_KEY="$(openssl rand -hex 32)" \
-  ADMIN_EMAIL=you@example.com \
-  ADMIN_PASSWORD='a-long-password'
-
-# HTTPS — required for the service worker / home-screen install
-dokku domains:set budgetfriendly budget.example.com
-dokku letsencrypt:enable budgetfriendly
+dokku config:set --no-restart budgetfriendly \
+  NODE_ENV=production TRUST_PROXY=2 \
+  SESSION_SECRET="$(openssl rand -hex 32)" ENCRYPTION_KEY="$(openssl rand -hex 32)" \
+  ADMIN_EMAIL='you@example.com' ADMIN_PASSWORD='a-long-password'
 ```
 
 ```bash
 # from your machine
 git remote add dokku dokku@your-host:budgetfriendly
-git push dokku master
+git push dokku main
 ```
 
-The `Procfile` runs migrations before booting, so a deploy applies schema
-changes automatically. Node's buildpack is detected from `package.json`; there
-is no build step, because there is no frontend toolchain.
+Migrations run when the app boots, so a deploy applies schema changes by
+itself. `app.json` adds a `/healthz` health check, so a deploy that can't reach
+the database never replaces a working one.
 
-Once it is up, unset `ADMIN_PASSWORD` if you like — the hash is in the database
-and the app only reads that variable when no user exists yet.
+### HTTPS with Tailscale
 
-`/healthz` returns `{"ok":true}` when the database is reachable, for your
-monitoring.
+The session cookie is HTTPS-only in production, and the iPhone home-screen
+install needs HTTPS too. On a homelab, Tailscale provides it without exposing
+anything to the internet:
+
+```bash
+curl -fsSL https://tailscale.com/install.sh | sh && tailscale up
+# admin console → DNS: enable MagicDNS and HTTPS Certificates
+dokku domains:set budgetfriendly <machine>.<tailnet>.ts.net
+tailscale serve --bg http://127.0.0.1:80
+```
+
+`TRUST_PROXY=2` accounts for the two proxies in that chain (Tailscale, then
+Dokku's nginx). On iPhone: connect Tailscale, open the URL in Safari, then
+Share → Add to Home Screen.
 
 ---
 
-## How the features work
+## Starting over
 
-### Income detection
+To erase all financial data and keep your login:
 
-Inflows are grouped by a normalised merchant key, and each group's gaps between
-deposits are measured. A group becomes an income source when the gaps are
-regular, the amounts are stable, and there are enough of them. The cadence is
-classified (weekly / biweekly / semimonthly / monthly / quarterly / …) and
-normalised to a monthly figure — a $2,450 biweekly paycheque is
-`2450 × 365.25 / 14 / 12 = $5,308.75` a month, not `$4,900`.
+```bash
+dokku run budgetfriendly npm run reset-data -- --yes
+```
 
-Paydays on the 1st and 15th produce alternating 14/16-day gaps that naively read
-as "biweekly". The detector checks whether the dates cluster on two days of the
-month and reclassifies them as semimonthly, which is 2×/month rather than
-2.17×.
+This removes transactions, accounts, upload history, recurring items, budgets,
+goals, categories and rules, then restores the default categories and rules.
+It cannot be undone; upload your statements again afterwards.
 
-Refunds and reimbursements are excluded by requiring a steadier cadence and a
-minimum amount; transfers between your own accounts are excluded by category.
+---
 
-The dashboard estimate is editable — **Budget → Adjust income**. A manual
-override wins over detection until you clear it.
+## How it works
 
-### Subscription detection
+### Import
 
-The same engine pointed at outflows. A recurring charge needs at least three
-occurrences (or two identical ones on a common billing cadence), gaps that hold
-to a median within tolerance, and an amount that does not vary more than 25%.
-Billing dates that wobble around weekends and month lengths still match.
+An upload is parsed (OFX 1.x SGML, OFX 2.x XML, or CSV), then everything else
+happens in **one database transaction**: insert new transactions in a single
+statement, normalise merchant names, categorise, and detect recurring series.
+An import lands completely or not at all. Every attempt is logged under
+Accounts → Upload history.
 
-Each detection gets a confidence score from its occurrence count, cadence
-regularity and amount stability. You confirm or dismiss each one; your decision
-survives every later re-scan, and only the numbers refresh. A detected
-subscription that stops appearing is marked **cancelled** automatically —
-unless you confirmed it, in which case your call stands.
+### Merchant names
 
-Transfers and credit-card payments are recurring but are not subscriptions, and
-are filtered out by category.
+Bank descriptions are noisy — Golden 1 writes `WITHDRAWAL AT SQ *BLUE BOTTLE`
+and `CHECKING DEPOSIT-ACH-1064831 EMPLOYER`, cut at 32 characters. Wrappers,
+payment-processor prefixes, card and store numbers, phone numbers, dates and
+location tails are stripped to a stable merchant key. When normalisation
+improves, existing transactions are updated on the next import.
 
-### Categories
+### Categories and rules
 
-Categories are yours to define, with an optional monthly budget each. Fifteen
-starter categories and roughly ninety merchant rules are seeded, weighted toward
-Sacramento-area merchants (SMUD, Raley's, Golden 1) since that is Golden 1's
-footprint.
+Categories live in groups (Income, Housing, Bills & Utilities, Food & Dining…).
+Each group is income, spending, or transfer; transfers count toward nothing.
+About 200 built-in rules match common merchants. Change a transaction's
+category and keep **Always categorize** ticked, and the app writes a rule for
+that merchant, moves its other transactions, and applies the rule to future
+uploads. Manually categorised transactions are never re-categorised
+automatically.
 
-Rules match on the normalised merchant key and the raw description, by
-`contains`, `equals` or `regex`, highest priority first. Re-categorising a
-transaction by hand does three things: it locks that row so automation never
-touches it again, it writes a high-priority learned rule for that merchant, and
-it re-points every other unlocked transaction from the same merchant.
+### Paychecks and bills
 
-Merchant normalisation is what makes this hold together. `SQ *BLUE BOTTLE 0192
-SACRAMENTO CA 09/14` and `POS DEBIT 4412 BLUE BOTTLE #12` both reduce to
-`BLUE BOTTLE` — processor prefixes, transaction-type noise, card and store
-numbers, dates, phone numbers and location tails are all stripped.
+Transactions are grouped by merchant, and the gaps between them are measured. A
+series becomes recurring when it has at least three occurrences, a regular
+cadence (weekly through yearly, including twice-monthly paydays) and a steady
+amount. Paychecks may vary much more than bills, because hours and overtime
+move them. Detected paychecks are categorised as Paychecks, and confirmed or
+dismissed items keep that decision across later imports. On the Recurring
+calendar each expected date is matched to real transactions within five days.
 
-### Goals
+### Budgets
 
-Three kinds:
+Budgets are per category per month, and **carry forward**: $450 for groceries
+set in September applies to every month after until you change it. Planned
+income is the sum of any income budgets you set, otherwise your detected
+paychecks. Amounts are net within a category, so a refund in Shopping reduces
+Shopping rather than counting as income.
 
-- **save** — a target amount by a target date; progress accrues from
-  contributions you log
-- **payoff** — same mechanics, framed as paying something down
-- **limit** — a spending ceiling on a category, measured against that
-  category's actual monthly spend
+---
 
-Each goal reports how much is left, what it needs per month to land on time, and
-whether it is on pace — comparing where you are against where even progress
-from creation to target date would have put you.
+## Tests
 
-### Monthly budget
+```bash
+npm test                  # parsers, merchant names, detection, recurring dates, HTTP wiring
+npm run test:integration  # against real Postgres — see below
+```
 
-The month view shows income (detected or overridden) against spending by
-category, what is left to allocate, and what is left to spend. Each category
-with a budget gets a pace check: spend-so-far against how far through the month
-you actually are, so a 20th-of-the-month reading is not compared to a full
-month's budget. Total spend is projected from the same pace.
+The integration suite needs a disposable UTF8 database whose name contains
+`test`; it drops and recreates that database's schema:
+
+```bash
+TEST_DATABASE_URL=postgres://user:pass@localhost:5432/budgetfriendly_test npm run test:integration
+```
+
+It covers upgrading an existing database through every migration, the reset
+script, rollback, upload and re-upload, categorisation and learned rules,
+paycheck and bill detection, recurring matching, budget carry-forward, cash-flow
+totals, and rejecting a bad file.
 
 ---
 
 ## Environment variables
 
-Every variable is listed with commentary in [`.env.example`](.env.example).
-The ones you cannot skip:
+Every variable is described in [`.env.example`](.env.example).
 
-| Variable | Why |
+| Variable | Purpose |
 |---|---|
-| `DATABASE_URL` | Postgres connection. Dokku injects this on link. |
+| `DATABASE_URL` | Postgres connection (Dokku sets it on link). Must be a UTF8 database. |
 | `SESSION_SECRET` | Signs the session cookie. 32+ random bytes. |
-| `ENCRYPTION_KEY` | AES-256-GCM key for stored bank credentials. Exactly 64 hex chars. Only needed for adapters that store credentials. |
-| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | Creates the single user on first boot. |
-
-The app refuses to start with a missing or too-short `SESSION_SECRET`, or a
-malformed `ENCRYPTION_KEY`, rather than starting insecurely.
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | Create your login on first boot. |
+| `TRUST_PROXY` | Reverse proxies in front of the app: `1` for Dokku alone, `2` behind Tailscale. |
+| `ENCRYPTION_KEY` | Only for the Direct Connect adapter's stored credentials; not used by uploads. |
 
 ---
 
@@ -417,57 +224,24 @@ malformed `ENCRYPTION_KEY`, rather than starting insecurely.
 Everything under `/api` except `/api/auth/login` requires the session cookie.
 
 ```
-POST   /api/auth/login              { email, password }
-POST   /api/auth/logout
-GET    /api/auth/me
-POST   /api/auth/password           { currentPassword, newPassword }
+POST   /api/auth/login | /api/auth/logout | /api/auth/password     GET /api/auth/me
 
-GET    /api/budget/dashboard?month=YYYY-MM     everything the home screen needs
-GET    /api/budget/summary?month=YYYY-MM
-GET    /api/budget/trend?months=6
+GET    /api/dashboard?month=YYYY-MM
+POST   /api/import                      multipart, field "file"
+GET    /api/import/history
 
-GET    /api/transactions?month=&search=&categoryId=&direction=&uncategorised=
-POST   /api/transactions            manual entry (cash, etc.)
-PATCH  /api/transactions/:id        { categoryId | excluded | notes }
-POST   /api/transactions/reanalyze  re-categorise + re-detect everything
+GET    /api/accounts                    PATCH /api/accounts/:id { name, archived }
+GET    /api/transactions?month|start|end|search|type|categoryId|groupId|merchantKey|accountId|review|limit|offset
+GET    /api/transactions/:id            PATCH { categoryId, applyToMerchant, notes, excluded, needsReview }
+POST   /api/transactions/review         { ids } | { all: true }
 
-GET    /api/categories
-POST   /api/categories
-PATCH  /api/categories/:id          { name, color, kind, monthlyBudget }
-DELETE /api/categories/:id
-GET    /api/categories/rules/all
-POST   /api/categories/rules        { categoryId, pattern, matchType }
-DELETE /api/categories/rules/:id
-
-GET    /api/subscriptions
-GET    /api/subscriptions/:id/transactions
-PATCH  /api/subscriptions/:id       { status: detected|confirmed|dismissed|cancelled }
-POST   /api/subscriptions/detect
-
-GET    /api/income
-PUT    /api/income/override         { amount }   — null clears it
-PATCH  /api/income/sources/:id
-GET    /api/income/sources/:id/transactions
-
-GET    /api/goals?month=YYYY-MM
-POST   /api/goals
-PATCH  /api/goals/:id
-DELETE /api/goals/:id
-GET    /api/goals/:id/contributions
-POST   /api/goals/:id/contributions { amount, occurredOn, note }
-
-GET    /api/connections
-GET    /api/connections/adapters
-GET    /api/connections/runs
-POST   /api/connections             { name, adapter, username?, password? }
-POST   /api/connections/:id/sync
-POST   /api/connections/:id/upload  multipart, field name "file"
-POST   /api/connections/:id/discover
-PUT    /api/connections/:id/credentials
-DELETE /api/connections/:id
-
+GET    /api/categories                  POST { name, emoji, groupId }   PATCH/DELETE /:id
+GET    /api/categories/rules/all        DELETE /api/categories/rules/:id
+GET    /api/budget?month=YYYY-MM        PUT /api/budget/:categoryId { month, amount }
+GET    /api/cashflow?months=12&by=category|group|merchant&start&end
+GET    /api/recurring?month=YYYY-MM     PATCH /api/recurring/:expense|income/:id { status }
+GET    /api/goals                       POST, PATCH/DELETE /:id, POST /:id/contributions
 GET    /api/settings
-PUT    /api/settings/:key
 ```
 
 ---
@@ -476,71 +250,22 @@ PUT    /api/settings/:key
 
 ```
 src/
-  server.js                    express app, security headers, static + SPA fallback
-  config.js                    env parsing and validation
-  db/
-    index.js                   pool, query helpers, numeric parsing
-    migrate.js                 forward-only migration runner
-    migrations/*.sql
-  middleware/auth.js           JWT cookie sessions, login throttling, first-boot user
-  routes/                      one router per resource
+  server.js, config.js
+  db/            pool + transaction helpers, migrations (SQL and JS), category seed
+  middleware/    session auth, login throttling
+  routes/        one router per screen / resource
   services/
-    importers/
-      index.js                 ADAPTER REGISTRY + persistence + dedupe
-      file.js                  CSV / QFX / OFX upload
-      ofx.js                   OFX Direct Connect client
-      web.js                   browser-automation extension point (stub)
-      parse-csv.js             RFC4180 reader + bank-column sniffing
-      parse-ofx.js             OFX 1.x SGML + 2.x XML parser
-    detect/
-      recurrence.js            THE detection engine (income and subscriptions)
-      index.js                 reconciles findings into the database
-      categorize.js            rule matching, manual override, rule learning
-    budget.js                  monthly summary, trend, goal progress
-  utils/                       merchant normalisation, money, dates, crypto
-public/                        the entire frontend: 4 files + icons
-test/                          logic and HTTP suites
-scripts/
-  create-user.js
-  make-icons.js                dependency-free PNG generator for the PWA icons
+    importers/   adapter registry, file + OFX parsers, persistence
+    detect/      recurrence engine, categorisation, reconciliation
+    budget.js    budget, cash flow, breakdowns, spending pace, goals
+    recurring.js calendar projection and paid/due matching
+    transactions.js, accounts.js
+public/
+  index.html, styles.css, sw.js, manifest.webmanifest
+  js/            main.js (shell), api, format, ui, charts, views/*
+scripts/         create-user, reset-data, make-sample-statement, make-icons
+test/            logic, http, integration
 ```
 
-The frontend is deliberately plain: `index.html`, `app.js`, `styles.css`,
-`sw.js`. No build step, no bundler, no external requests at runtime — the
-Content-Security-Policy blocks them, and there is nothing to block.
-
----
-
-## Tests
-
-```bash
-npm test
-```
-
-Two suites, no test framework, no database required:
-
-- `test/logic.test.js` — CSV parsing across three bank export shapes, OFX 1.x
-  SGML parsing including an error response, and the recurrence engine against
-  synthetic series (monthly subs with jittered billing dates, biweekly payroll,
-  semimonthly payroll, and irregular spending that must *not* be flagged).
-- `test/http.test.js` — boots the real Express app against a stubbed database
-  and checks route registration, the auth gate, login and session cookies,
-  security headers, static and SPA serving, and the adapter registry.
-
----
-
-## Adding another institution
-
-Nothing in the app is Golden 1-specific — the institution only shows up in
-config. To add a second bank:
-
-- **Another OFX institution:** create a second connection with its own
-  credentials. Per-connection OFX settings override the environment defaults
-  (see `settingsFor()` in `src/services/importers/ofx.js`), so two institutions
-  with different endpoints coexist.
-- **A bank with no OFX:** use the file adapter; each connection keeps its own
-  account, and uploads merge into it.
-- **Something else entirely:** write an adapter. Implement `fetch(connection,
-  options)` returning `{ accounts, transactions }` in the normalised shape
-  documented at the top of `src/services/importers/index.js`, then `register()`
-  it. Dedupe, categorisation, detection and every view come along for free.
+The frontend has no build step and makes no external requests; the
+Content-Security-Policy allows only the app's own origin.

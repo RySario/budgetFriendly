@@ -14,7 +14,9 @@
     "create-user": "node scripts/create-user.js",
     "make-icons": "node scripts/make-icons.js",
     "test": "node test/logic.test.js && node test/http.test.js",
-    "make-sample": "node scripts/make-sample-statement.js"
+    "make-sample": "node scripts/make-sample-statement.js",
+    "reset-data": "node scripts/reset-data.js",
+    "test:integration": "node test/integration.test.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
