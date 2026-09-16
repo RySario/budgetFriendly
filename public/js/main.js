@@ -10,6 +10,7 @@ import {
 } from './ui.js';
 import { esc, currentMonthKey, shiftMonth, longDate, plural } from './format.js';
 import { startTour } from './tour.js';
+import { initGestures } from './gestures.js';
 
 const ROUTES = {
   dashboard: { title: 'Dashboard', icon: 'dashboard', load: () => import('./views/dashboard.js') },
@@ -30,6 +31,8 @@ const NAV = [
 ];
 const TABS = ['dashboard', 'plan', 'transactions', 'budget'];
 const MORE = ['recurring', 'goals', 'cashflow', 'accounts', 'settings'];
+// Swiping sideways walks the pages in the order the tab bar and More sheet list them.
+const SWIPE_ORDER = [...TABS, ...MORE];
 
 const state = { user: null, month: currentMonthKey(), groups: null, reviewCount: 0, prefs: null };
 
@@ -37,6 +40,7 @@ let renderSeq = 0;
 let currentPath = null;
 let cleanups = [];
 let headerHandler = null;
+let gestures = null;
 
 function parseHash() {
   const raw = location.hash.replace(/^#\/?/, '');
@@ -138,6 +142,7 @@ async function render(opts = {}) {
     headerHandler = handler;
     content.replaceChildren(view);
     if (!samePage) window.scrollTo(0, 0);
+    if (gestures) gestures.enter(view);
     if (after) after();
   } catch (err) {
     if (seq !== renderSeq || err.status === 401) return;
@@ -350,6 +355,22 @@ window.addEventListener('drop', (e) => {
 });
 
 window.addEventListener('hashchange', () => { if (state.user) render(); });
+
+// Pull down to refresh, swipe sideways between pages (touch screens).
+gestures = initGestures({
+  enabled: () => !!state.user && !document.body.classList.contains('no-scroll') && $('#modal-layer').hidden,
+  async onRefresh() {
+    state.groups = null;
+    await refreshBadges();
+    await render();
+  },
+  neighbour(dir) {
+    const i = SWIPE_ORDER.indexOf(currentPath);
+    const next = i === -1 ? null : SWIPE_ORDER[i + dir];
+    return next ? `#/${next}` : null;
+  },
+  navigate,
+});
 window.addEventListener('scroll', () => {
   $('.topbar').classList.toggle('scrolled', window.scrollY > 4);
 }, { passive: true });
