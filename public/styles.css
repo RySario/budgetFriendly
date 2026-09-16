@@ -128,6 +128,8 @@
 
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
+/* The app draws its own pull-to-refresh, so turn off the browser's. */
+html, body { overscroll-behavior-y: none; }
 body {
   background: var(--page);
   color: var(--ink);
@@ -213,6 +215,19 @@ svg { flex: none; }
 }
 .view { display: flex; flex-direction: column; gap: 16px; transition: opacity 0.15s ease; }
 .view.loading { opacity: 0.5; pointer-events: none; }
+
+/* Pull-to-refresh: a disc that slides out from under the top bar. */
+.ptr {
+  position: fixed; left: 50%; top: 0; z-index: 19; pointer-events: none;
+  opacity: 0; transform: translate(-50%, -44px);
+}
+.ptr-disc {
+  width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--surface); color: var(--muted); box-shadow: var(--lift);
+}
+.ptr-disc svg { width: 20px; height: 20px; }
+.ptr.armed .ptr-disc { color: var(--accent-ink); }
+.ptr.spinning .ptr-disc svg { animation: spin 0.8s linear infinite; }
 
 /* Floating tab bar on phones. */
 .tabbar {
