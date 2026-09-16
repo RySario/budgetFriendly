@@ -5,7 +5,7 @@
    new modules. API responses are never cached: a stale balance is worse than an
    honest error. */
 
-const VERSION = 'bf-v4';
+const VERSION = 'bf-v5';
 const SHELL = [
   '/',
   '/index.html',
@@ -17,6 +17,7 @@ const SHELL = [
   '/js/format.js',
   '/js/ui.js',
   '/js/tour.js',
+  '/js/gestures.js',
   '/js/charts.js',
   '/js/views/dashboard.js',
   '/js/views/plan.js',
